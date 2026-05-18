@@ -1,0 +1,232 @@
+Build a production-grade cross-chain bridge UI for MChain — a standalone React + Vite web application. Visually it must match the MChain Validator Wallet app exactly: same dark navy palette, same Inter typeface, same card language, same primary blue. Functionally it must be on par with Binance Bridge / Stargate Finance — clear, fast, and trustworthy. You already have the deployed smart contract; this prompt covers UI only.
+
+Design System — Match the Wallet App Exactly
+background:       #0A0E1A
+surface:          #111827
+surface-raised:   #1A2235
+border:           #1F2D45
+primary:          #0EA5E9
+primary-dim:      #0EA5E914
+primary-hover:    #0284C7
+success:          #10B981
+danger:           #EF4444
+warning:          #F59E0B
+muted:            #64748B
+foreground:       #F1F5F9
+
+Font: Inter — 400 / 500 / 600 / 700
+Monospace: JetBrains Mono — addresses, hashes, amounts
+Cards: border border-[#1F2D45] bg-[#111827] rounded-2xl
+All inputs: dark fill, border-[#1F2D45] at rest, border-[#0EA5E9] on focus, rounded-xl
+Buttons: primary = linear-gradient(135deg, #0EA5E9, #0284C7), full-width, rounded-xl, py-4, bold text
+Disabled state: opacity-40 cursor-not-allowed
+Skeleton loaders: shimmer pulse #1A2235 → #243048, never spinners
+Tech Stack
+React 18 + Vite + TypeScript (strict)
+Tailwind CSS v3 — dark mode default
+TanStack Query v5 — all on-chain reads cached and auto-refreshed
+viem — all EVM interactions (read contract, simulate, write)
+wagmi v2 — wallet connection (MetaMask, WalletConnect, Coinbase Wallet)
+@rainbow-me/rainbowkit v2 — connect wallet modal (custom theme matching dark palette above)
+react-hook-form + zod — form validation
+framer-motion — route transitions, amount input animation, progress step animation
+lucide-react — icons (ArrowLeftRight, ChevronDown, RotateCw, CheckCircle2, XCircle, Clock, Copy, ExternalLink)
+pnpm workspace, placed at artifacts/mchain-bridge
+Layout
+Single-page application. No sidebar. Centered content column, max-w-lg mx-auto. Full-height dark background.
+
+Top bar (sticky, blurred backdrop backdrop-blur-md bg-[#0A0E1A]/80):
+
+Left: MChain Bridge logo — small chain-link icon + "MChain Bridge" in Inter_700Bold
+Right: RainbowKit <ConnectButton> — custom styled to match primary blue, same border radius as the rest of the UI
+Main content: vertically centered on desktop, top-aligned on mobile. Padding px-4 pt-6 pb-24.
+
+Core Bridge Widget
+A single elevated card (bg-[#111827] border border-[#1F2D45] rounded-2xl p-6 shadow-xl shadow-black/40). This is the entire bridge interface — no tabs, no sidebar, no clutter.
+
+1. From / To Chain Selector
+Two chain selector rows stacked vertically with a swap button between them.
+
+Each chain row:
+
+┌─────────────────────────────────────────────┐
+│  FROM                                        │
+│  ┌──────────────────────────────┐  Balance   │
+│  │  🔵  Ethereum    ▾           │  0.00 ETH  │
+│  └──────────────────────────────┘            │
+└─────────────────────────────────────────────┘
+
+Chain selector is a button that opens a bottom sheet / dropdown modal listing all supported chains with their logos and names
+Each chain shows: logo (32×32 rounded-full) + chain name + "Connected" badge if it's the active wallet chain
+Selected chain highlighted with border-[#0EA5E9] bg-[#0EA5E914]
+Swap button (between From and To rows):
+
+Circular icon button, centered: w-10 h-10 rounded-full bg-[#1A2235] border border-[#1F2D45]
+Icon: ArrowLeftRight from lucide, 16px, primary color
+On click: animates a 180° rotation (framer-motion) and swaps the two chains
+Disabled if From and To are the same chain
+2. Token + Amount Input
+┌─────────────────────────────────────────────┐
+│  YOU SEND                                    │
+│  ┌─────────────┐  ┌─────────────────────┐   │
+│  │  MC    ▾    │  │  0.00               │   │
+│  └─────────────┘  └─────────────────────┘   │
+│                              $0.00  MAX       │
+└─────────────────────────────────────────────┘
+
+Token selector (left): opens a searchable modal listing bridgeable tokens. Each row: logo + symbol + name + balance. Search filters by name or symbol.
+Amount input (right): large numeric input, text-2xl font-bold, right-aligned. Placeholder 0.00. Only allows numeric input with one decimal point.
+Below: USD equivalent (left, muted, auto-updates as user types) + MAX button (right, primary color, sets to full wallet balance minus estimated gas)
+If amount exceeds balance: input border turns red (border-[#EF4444]), error text appears below: "Insufficient balance"
+If amount below bridge minimum: warning text "Minimum bridge amount is X MC"
+3. You Receive (read-only preview)
+┌─────────────────────────────────────────────┐
+│  YOU RECEIVE (estimated)                     │
+│  ┌─────────────────────────────────────────┐ │
+│  │  MC  ≈ 99.7 MC  ($…)                   │ │
+│  └─────────────────────────────────────────┘ │
+└─────────────────────────────────────────────┘
+
+Dimmed, non-interactive, bg-[#0A0E1A] rounded-xl p-4
+Shows estimated receive amount after fees
+Label: "≈" prefix to emphasize it's an estimate
+Beneath: small muted text "Amount may vary due to price impact"
+4. Bridge Details Accordion
+A collapsible section (collapsed by default, expands with smooth height animation):
+
+  Bridge Details  ▾
+  ─────────────────────────────────────
+  Bridge Fee           0.1% · 0.01 MC
+  Destination Gas Fee  ~0.002 ETH
+  Estimated Time       ~3 minutes
+  Route                MChain → Ethereum
+  Contract             0x1234…5678  ↗
+  ─────────────────────────────────────
+
+Each row: label (muted, 12px) left-aligned + value (foreground, 13px, semibold) right-aligned.
+
+Contract address links to the explorer (/address/:contract) in a new tab
+Estimated time shows a clock icon + duration
+If fee is 0: show "Free" in green
+5. Bridge Button
+Full-width, primary gradient, rounded-xl py-4 text-base font-bold.
+
+States (mutually exclusive):
+
+No wallet → "Connect Wallet" (opens RainbowKit modal on click)
+Wrong network → "Switch to [FromChain]" (calls switchChain on click), amber gradient #F59E0B → #D97706
+Enter amount → disabled, muted, grey
+Insufficient balance → disabled, red tint #EF444440 border
+Ready → "Bridge [amount] [token]" — active, primary gradient
+Approving → "Approving…" + spinner, disabled
+Bridging → "Bridging…" + spinner, disabled
+Confirming → "Waiting for confirmation…" + spinner, disabled
+Below the button: small muted disclaimer text-xs text-center text-[#64748B]:
+
+"By bridging you agree to the terms of the smart contract. Transactions are irreversible."
+
+Transaction Flow — Step Overlay
+When the user clicks Bridge (and confirms in wallet), the main card morphs into a step-progress overlay using framer-motion layout animations. The widget stays the same size — only the content changes. No page navigation.
+
+┌─────────────────────────────────────────────┐
+│                                              │
+│   Bridging 100 MC → Ethereum                │
+│                                              │
+│   ●──────●──────○──────○                   │
+│   ✓ Approve  ✓ Send  ◌ Relay  ○ Done       │
+│                                              │
+│   ┌────────────────────────────────┐         │
+│   │  Step 2 of 4 · Sending...      │         │
+│   │  Tx: 0x3f4a…9c2b  ↗           │         │
+│   │  Submitted to MChain           │         │
+│   └────────────────────────────────┘         │
+│                                              │
+│   Estimated time remaining: ~2 min 40 s     │
+│                                              │
+│          [View on Explorer]                  │
+│                                              │
+└─────────────────────────────────────────────┘
+
+Step indicators:
+
+Completed: filled circle with ✓, primary blue
+Current: pulsing ring animation (framer-motion animate={{ scale: [1, 1.2, 1] }}), primary blue
+Pending: empty circle, border only, muted
+Steps (adjust to match your contract's actual flow):
+
+Approve (ERC-20 only — skip for native MC) — wallet approval tx
+Send — call bridge contract bridge() function, wallet signs
+Relay — waiting for relayer / destination chain to pick up — polled every 5 s
+Done — destination tx confirmed
+Done state:
+
+┌─────────────────────────────────────────────┐
+│              ✓ Bridge Complete               │
+│                                              │
+│   Sent:      100 MC on MChain               │
+│   Received:  99.7 MC on Ethereum            │
+│   Dest Tx:   0xabcd…1234  ↗                 │
+│                                              │
+│          [Bridge Again]  [View Tx]          │
+└─────────────────────────────────────────────┘
+
+Failed state: red XCircle icon, error message (decoded from revert reason if possible), "Try Again" button.
+
+Transaction History Panel
+Below the bridge widget: a "Recent Bridges" section. Collapsed by default with a "Show history" toggle.
+
+RECENT BRIDGES
+──────────────────────────────────────────────
+↑  100 MC → ETH  ·  Pending  ·  2 min ago  ↗
+✓   50 MC → ETH  ·  Complete ·  1 hr ago   ↗
+✗   25 MC → ETH  ·  Failed   ·  3 hrs ago  ↗
+──────────────────────────────────────────────
+
+Stored in localStorage keyed by wallet address
+Each row: direction arrow + amount + chain → chain + status badge + relative time + explorer link
+Status badge colors: yellow = Pending, green = Complete, red = Failed
+Max 20 entries shown, "Clear history" link at bottom
+Chain Selector Modal
+Full-screen bottom sheet on mobile, centered modal on desktop.
+
+┌─────────────────────────────────────────────┐
+│  Select Network                    ✕         │
+│  ┌───────────────────────────────────────┐   │
+│  │  🔍  Search networks…               │   │
+│  └───────────────────────────────────────┘   │
+│                                              │
+│  SUPPORTED NETWORKS                          │
+│  ┌────────────────────────────────────────┐  │
+│  │  🔵  MChain           Chain 1888      │  │
+│  │  ⬟   Ethereum         Chain 1        │  │
+│  │  🟡  BNB Smart Chain  Chain 56        │  │
+│  └────────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+
+Each chain row: logo (32×32) + name + chain ID (muted) + "Connected" pill if active
+Tapping a chain closes the modal and updates the From/To selector
+Selecting same chain for both: auto-reassigns the other to the next available chain
+Token Selector Modal
+Same structure as chain selector:
+
+Search by name or symbol
+Each row: token logo (32×32) + symbol (bold) + name (muted) + wallet balance (right-aligned)
+"No tokens found" empty state if search has no results
+Responsive Behaviour
+Desktop (≥ 768 px): widget centered, max-width 480 px, modals centered with backdrop
+Mobile (< 768 px): full-width widget with px-4, chain/token modals as bottom sheets with drag-to-dismiss, amount input triggers numeric keyboard
+Safe area insets respected for bottom sheet on iOS (padding-bottom: env(safe-area-inset-bottom))
+Empty & Error States
+Situation	UI
+Wallet not connected	Dimmed amount input + "Connect wallet to see balance"
+RPC error loading balance	"—" with retry icon, tooltip "Failed to load"
+Bridge contract read fails	Warning banner above button: "Could not estimate fees — proceed with caution"
+Unsupported chain selected	Error card inline: "Bridging from [chain] is not yet supported"
+Transaction rejected by user	Toast: "Transaction cancelled" (bottom center, 3 s, dismissible)
+Quality Bar
+TypeScript strict — no any
+All amounts as BigInt — no float arithmetic on-chain values
+All token decimals respected in formatting (formatUnits from viem)
+Transaction polling uses exponential backoff — not a fixed interval hammer
+No fake/mock data — if a value isn't loaded yet, show a skeleton; if it failed, show the error
+aria-label on all icon-only buttons, keyboard navigable, focus-visible rings matching primary color

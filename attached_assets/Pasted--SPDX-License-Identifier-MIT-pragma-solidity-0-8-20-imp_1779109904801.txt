@@ -1,0 +1,397 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "./USDT.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+
+/**
+ * @title USDT Bridge on Universe Chain
+ * @dev Mints USDT on Universe Chain based on deposits from BSC
+ */
+contract USDTBridgeUniverse is Ownable, ReentrancyGuard, Pausable {
+    USDT public usdtToken;
+    address public bscBridge; // Address of the bridge contract on BSC (for reference)
+
+    mapping(bytes32 => bool) public processedMints; // To prevent double minting
+
+    // Transaction history
+    enum TransactionStatus { Pending, Completed, Failed }
+
+    struct BridgeTransaction {
+        bytes32 transactionId;
+        address user;
+        string transactionType; // "mint", "burn"
+        uint256 amount;
+        string sourceChain;
+        string destinationChain;
+        string destinationAddress;
+        TransactionStatus status;
+        uint256 timestamp;
+        bytes32 linkedId; // depositId or burnId
+    }
+
+    mapping(bytes32 => BridgeTransaction) public transactions;
+    bytes32[] public transactionList;
+
+    event Mint(
+        address indexed user,
+        uint256 amount,
+        bytes32 mintId,
+        string sourceChain,
+        bytes32 depositId
+    );
+    event Burn(
+        address indexed user,
+        uint256 amount,
+        bytes32 burnId,
+        string destinationChain,
+        string destinationAddress
+    );
+    event TransactionStatusUpdated(
+        bytes32 indexed transactionId,
+        address indexed user,
+        TransactionStatus status
+    );
+    event BridgeAdminUpdated(address indexed oldAdmin, address indexed newAdmin);
+
+    constructor() Ownable(msg.sender) {
+        usdtToken = new USDT(msg.sender); // Send initial 10M to deployer
+        usdtToken.transferOwnership(address(this)); // Bridge controls mint/burn
+    }
+
+
+
+    /**
+     * @dev Set the BSC bridge contract address (admin only)
+     * @param _bscBridge Address of the bridge on BSC
+     */
+    function setBscBridge(address _bscBridge) external onlyOwner {
+        address oldAdmin = bscBridge;
+        bscBridge = _bscBridge;
+        emit BridgeAdminUpdated(oldAdmin, _bscBridge);
+    }
+
+    /**
+     * @dev Mint wUSDT based on deposit from BSC (admin only)
+     * @param user Address to mint wUSDT to
+     * @param amount Amount of wUSDT to mint
+     * @param depositId Unique deposit ID from BSC
+     */
+    function mint(
+        address user,
+        uint256 amount,
+        bytes32 depositId
+    ) external onlyOwner whenNotPaused nonReentrant {
+        require(amount > 0, "Amount must be greater than 0");
+        require(user != address(0), "Invalid user address");
+
+        // Generate mint ID
+        bytes32 mintId = keccak256(abi.encodePacked(user, amount, depositId));
+
+        // Ensure not already processed
+        require(!processedMints[mintId], "Mint already processed");
+
+        // Mark as processed
+        processedMints[mintId] = true;
+
+        // Record transaction
+        _recordTransaction(
+            user,
+            "mint",
+            amount,
+            "BSC",
+            "UniverseChain",
+            "", // No destination address for mint
+            depositId
+        );
+
+        // Mint USDT to user
+        usdtToken.mint(user, amount);
+
+        emit Mint(user, amount, mintId, "BSC", depositId);
+    }
+
+    /**
+     * @dev Burn USDT for bridging back to BSC
+     * @param amount Amount of USDT to burn
+     * @param destinationAddress Address on BSC to receive USDT
+     */
+    function withdraw(uint256 amount, string memory destinationAddress) external whenNotPaused nonReentrant {
+        require(amount > 0, "Amount must be greater than 0");
+        require(bytes(destinationAddress).length > 0, "Invalid destination address");
+
+        // Transfer USDT from user to contract
+        require(usdtToken.transferFrom(msg.sender, address(this), amount), "USDT transfer failed");
+
+        // Burn the USDT
+        usdtToken.burn(amount);
+
+        // Generate unique burn ID
+        bytes32 burnId = keccak256(abi.encodePacked(msg.sender, amount, block.timestamp, destinationAddress));
+
+        // Record transaction
+        _recordTransaction(
+            msg.sender,
+            "burn",
+            amount,
+            "UniverseChain",
+            "BSC",
+            destinationAddress,
+            burnId
+        );
+
+        emit Burn(msg.sender, amount, burnId, "BSC", destinationAddress);
+    }
+
+    /**
+     * @dev Record a transaction
+     */
+    function _recordTransaction(
+        address user,
+        string memory transactionType,
+        uint256 amount,
+        string memory sourceChain,
+        string memory destinationChain,
+        string memory destinationAddress,
+        bytes32 linkedId
+    ) internal returns (bytes32) {
+        bytes32 transactionId = keccak256(abi.encodePacked(
+            user,
+            amount,
+            block.timestamp,
+            transactionType,
+            linkedId
+        ));
+
+        BridgeTransaction memory newTransaction = BridgeTransaction({
+            transactionId: transactionId,
+            user: user,
+            transactionType: transactionType,
+            amount: amount,
+            sourceChain: sourceChain,
+            destinationChain: destinationChain,
+            destinationAddress: destinationAddress,
+            status: TransactionStatus.Pending,
+            timestamp: block.timestamp,
+            linkedId: linkedId
+        });
+
+        transactions[transactionId] = newTransaction;
+        transactionList.push(transactionId);
+
+        emit TransactionStatusUpdated(transactionId, user, TransactionStatus.Pending);
+        return transactionId;
+    }
+
+    /**
+     * @dev Update transaction status (admin only)
+     */
+    function updateTransactionStatus(bytes32 transactionId, TransactionStatus status) external onlyOwner {
+        require(transactions[transactionId].user != address(0), "Transaction does not exist");
+        transactions[transactionId].status = status;
+        emit TransactionStatusUpdated(transactionId, transactions[transactionId].user, status);
+    }
+
+    /**
+     * @dev Get transactions by status and time range
+     */
+    function getTransactionsByStatusAndTimeRange(
+        TransactionStatus status,
+        uint256 timeRange
+    ) external view returns (BridgeTransaction[] memory) {
+        uint256 endTime = block.timestamp;
+        uint256 startTime = endTime - timeRange;
+
+        uint256 count = 0;
+
+        // Count matching transactions
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.status == status && transaction.timestamp >= startTime && transaction.timestamp <= endTime) {
+                count++;
+            }
+        }
+
+        // Create result array
+        BridgeTransaction[] memory result = new BridgeTransaction[](count);
+        uint256 index = 0;
+
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.status == status && transaction.timestamp >= startTime && transaction.timestamp <= endTime) {
+                result[index] = transaction;
+                index++;
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * @dev Get user transactions by time range
+     */
+    function getUserTransactionsByTimeRange(
+        address user,
+        uint256 timeRange
+    ) external view returns (BridgeTransaction[] memory) {
+        uint256 endTime = block.timestamp;
+        uint256 startTime = endTime - timeRange;
+
+        uint256 count = 0;
+
+        // Count matching transactions
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.user == user && transaction.timestamp >= startTime && transaction.timestamp <= endTime) {
+                count++;
+            }
+        }
+
+        // Create result array
+        BridgeTransaction[] memory result = new BridgeTransaction[](count);
+        uint256 index = 0;
+
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.user == user && transaction.timestamp >= startTime && transaction.timestamp <= endTime) {
+                result[index] = transaction;
+                index++;
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * @dev Get transaction by ID
+     */
+    function getTransaction(bytes32 transactionId) external view returns (BridgeTransaction memory) {
+        return transactions[transactionId];
+    }
+
+    /**
+     * @dev Get total transaction count
+     */
+    function getTotalTransactions() external view returns (uint256) {
+        return transactionList.length;
+    }
+
+    /**
+     * @dev Compare two strings
+     */
+    function compareStrings(string memory a, string memory b) internal pure returns (bool) {
+        return (keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b)));
+    }
+
+    /**
+     * @dev Get market overview metrics
+     */
+    function getMarketOverview() external view returns (
+        uint256 current24hVolume,
+        uint256 previous24hVolume,
+        uint256 volumeIncreasePercent,
+        uint256 successRate,
+        uint256 avgProcessingTime
+    ) {
+        uint256 currentTime = block.timestamp;
+        uint256 current24hStart = currentTime - 86400; // 24 hours ago
+        uint256 previous24hStart = current24hStart - 86400; // 48 hours ago
+
+        // Calculate current 24h volume
+        current24hVolume = 0;
+        uint256 completedTxs = 0;
+        uint256 totalTxs = 0;
+        uint256 totalProcessingTime = 0;
+
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+
+            if (transaction.timestamp >= current24hStart) {
+                current24hVolume += transaction.amount;
+                totalTxs++;
+                if (transaction.status == TransactionStatus.Completed) {
+                    completedTxs++;
+                }
+            } else if (transaction.timestamp >= previous24hStart && transaction.timestamp < current24hStart) {
+                previous24hVolume += transaction.amount;
+            }
+
+            // Calculate processing time for completed transactions
+            if (transaction.status == TransactionStatus.Completed && !compareStrings(transaction.transactionType, "deposit") && !compareStrings(transaction.transactionType, "burn")) {
+                // For mint/withdrawal transactions, calculate time from linked transaction
+                bytes32 linkedTxId = transaction.linkedId;
+                if (transactions[linkedTxId].timestamp > 0) {
+                    totalProcessingTime += (transaction.timestamp - transactions[linkedTxId].timestamp);
+                }
+            }
+        }
+
+        // Calculate previous 24h volume
+        previous24hVolume = 0;
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.timestamp >= previous24hStart && transaction.timestamp < current24hStart) {
+                previous24hVolume += transaction.amount;
+            }
+        }
+
+        // Calculate volume increase percentage
+        if (previous24hVolume > 0) {
+            volumeIncreasePercent = ((current24hVolume - previous24hVolume) * 100) / previous24hVolume;
+        } else {
+            volumeIncreasePercent = current24hVolume > 0 ? 100 : 0;
+        }
+
+        // Calculate success rate
+        successRate = totalTxs > 0 ? (completedTxs * 100) / totalTxs : 0;
+
+        // Calculate average processing time
+        uint256 processedTxs = 0;
+        for (uint256 i = 0; i < transactionList.length; i++) {
+            BridgeTransaction memory transaction = transactions[transactionList[i]];
+            if (transaction.status == TransactionStatus.Completed && !compareStrings(transaction.transactionType, "deposit") && !compareStrings(transaction.transactionType, "burn")) {
+                bytes32 linkedTxId = transaction.linkedId;
+                if (transactions[linkedTxId].timestamp > 0) {
+                    processedTxs++;
+                }
+            }
+        }
+        avgProcessingTime = processedTxs > 0 ? totalProcessingTime / processedTxs : 0;
+
+        return (current24hVolume, previous24hVolume, volumeIncreasePercent, successRate, avgProcessingTime);
+    }
+
+    /**
+     * @dev Emergency withdraw USDT (admin only)
+     * @param amount Amount to withdraw
+     */
+    function emergencyWithdraw(uint256 amount) external onlyOwner {
+        // Note: This would require the USDT contract to allow transfer to owner
+        // For simplicity, assuming USDT has a transfer function
+        usdtToken.transfer(owner(), amount);
+    }
+
+    /**
+     * @dev Pause the contract
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @dev Unpause the contract
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    /**
+     * @dev Get USDT contract address
+     */
+    function getUSDTAddress() external view returns (address) {
+        return address(usdtToken);
+    }
+}
+

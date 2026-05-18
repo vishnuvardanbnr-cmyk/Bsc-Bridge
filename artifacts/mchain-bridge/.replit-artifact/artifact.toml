@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "MChain Bridge"
+version = "1.0.0"
+id = "artifacts/mchain-bridge"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25179
+
+[services.development]
+run = "pnpm --filter @workspace/mchain-bridge run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mchain-bridge", "run", "build" ]
+publicDir = "artifacts/mchain-bridge/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25179"
+BASE_PATH = "/"
