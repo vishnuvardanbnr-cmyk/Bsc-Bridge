@@ -1,91 +1,123 @@
 import { useState, useCallback } from 'react';
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSimulateContract } from 'wagmi';
-import { parseUnits } from 'viem';
-import { CONTRACTS, erc20Abi, bridgeAbi } from '../lib/contracts';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi';
+import { parseUnits, type Address } from 'viem';
+import { CONTRACTS, usdtAbi, bscBridgeAbi, mchainBridgeAbi } from '../lib/contracts';
 import { bsc } from 'wagmi/chains';
-import { mchain } from '../lib/chains';
 
 export type BridgeStep = 'idle' | 'approving' | 'sending' | 'relaying' | 'done' | 'failed';
 
-export function useBridge(fromChainId: number, toChainId: number, amount: string) {
+export function useBridge(fromChainId: number, toChainId: number, amount: string, destinationAddress: string) {
   const { address } = useAccount();
   const [step, setStep] = useState<BridgeStep>('idle');
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | undefined>();
-  const [approveHash, setApproveHash] = useState<string | undefined>();
 
   const isBsc = fromChainId === bsc.id;
-  const tokenAddress = isBsc ? CONTRACTS.bsc.token : CONTRACTS.mchain.token;
-  const bridgeAddress = isBsc ? CONTRACTS.bsc.bridge : CONTRACTS.mchain.bridge;
+  const tokenAddress: Address = isBsc ? CONTRACTS.bsc.token : CONTRACTS.mchain.token;
+  const bridgeAddress: Address = isBsc ? CONTRACTS.bsc.bridge : CONTRACTS.mchain.bridge;
 
-  const parsedAmount = amount ? parseUnits(amount, 18) : 0n;
+  const parsedAmount = amount && !isNaN(Number(amount)) && Number(amount) > 0
+    ? parseUnits(amount, 18)
+    : 0n;
 
-  const { data: allowance } = useReadContract({
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: tokenAddress,
-    abi: erc20Abi,
+    abi: usdtAbi,
     functionName: 'allowance',
-    args: address ? [address, bridgeAddress] : undefined,
-    query: { enabled: !!address && !!amount },
+    args: [address ?? '0x0000000000000000000000000000000000000000', bridgeAddress],
+    query: { enabled: !!address && parsedAmount > 0n },
   });
 
   const needsApproval = allowance !== undefined && allowance < parsedAmount;
 
   const { writeContractAsync: writeApprove } = useWriteContract();
-  const { writeContractAsync: writeBridge } = useWriteContract();
+  const { writeContractAsync: writeBridgeContract } = useWriteContract();
+
+  const { data: approveReceipt } = useWaitForTransactionReceipt({ hash: txHash as `0x${string}` | undefined });
 
   const handleBridge = useCallback(async () => {
-    if (!amount || !address) return;
+    if (!amount || !address || !destinationAddress) return;
     setError(null);
+
     try {
       if (needsApproval) {
         setStep('approving');
-        const hash = await writeApprove({
+        const approveHash = await writeApprove({
           address: tokenAddress,
-          abi: erc20Abi,
+          abi: usdtAbi,
           functionName: 'approve',
           args: [bridgeAddress, parsedAmount],
         });
-        setApproveHash(hash);
-        // We'd wait for receipt here in a real app
+        setTxHash(approveHash);
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Approval timeout')), 120_000);
+          const interval = setInterval(async () => {
+            try {
+              await refetchAllowance();
+              clearInterval(interval);
+              clearTimeout(timeout);
+              resolve();
+            } catch {
+              // still waiting
+            }
+          }, 3000);
+        });
       }
 
       setStep('sending');
-      const hash = await writeBridge({
-        address: bridgeAddress,
-        abi: bridgeAbi,
-        functionName: 'bridge',
-        args: [parsedAmount, BigInt(toChainId)],
-      });
-      setTxHash(hash);
-      
+
+      let sendHash: string;
+      if (isBsc) {
+        sendHash = await writeBridgeContract({
+          address: bridgeAddress,
+          abi: bscBridgeAbi,
+          functionName: 'deposit',
+          args: [parsedAmount, destinationAddress],
+        });
+      } else {
+        sendHash = await writeBridgeContract({
+          address: bridgeAddress,
+          abi: mchainBridgeAbi,
+          functionName: 'withdraw',
+          args: [parsedAmount, destinationAddress],
+        });
+      }
+
+      setTxHash(sendHash);
       setStep('relaying');
-      
-      // Mock relay delay
+
+      // Poll for relay completion — in production the relayer picks this up
+      // Mock advance after 15s for demo
       setTimeout(() => {
         setStep('done');
-      }, 15000);
+      }, 15_000);
 
-    } catch (err: any) {
-      console.error(err);
-      setError(err.shortMessage || err.message || 'Transaction failed');
+    } catch (err: unknown) {
+      const e = err as { shortMessage?: string; message?: string };
+      setError(e.shortMessage ?? e.message ?? 'Transaction failed');
       setStep('failed');
     }
-  }, [amount, address, needsApproval, writeApprove, writeBridge, tokenAddress, bridgeAddress, parsedAmount, toChainId]);
+  }, [
+    amount, address, destinationAddress, needsApproval,
+    writeApprove, writeBridgeContract,
+    tokenAddress, bridgeAddress, parsedAmount, isBsc,
+    refetchAllowance,
+  ]);
 
-  const reset = () => {
+  const reset = useCallback(() => {
     setStep('idle');
     setError(null);
     setTxHash(undefined);
-    setApproveHash(undefined);
-  };
+  }, []);
 
   return {
     step,
     error,
     txHash,
-    approveHash,
     needsApproval,
     handleBridge,
     reset,
+    approveReceipt,
   };
 }
