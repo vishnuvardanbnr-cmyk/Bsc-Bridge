@@ -325,18 +325,10 @@ export function BridgeWidget() {
                   type="text"
                   placeholder={isBsc ? 'mxc1... (your MChain wallet address)' : '0x... (your BSC wallet address)'}
                   value={destinationAddress}
-                  onChange={(e) => setDestinationAddress(e.target.value.trim())}
-                  className="bg-transparent text-sm font-mono text-foreground outline-none w-full placeholder:text-muted-foreground/40"
+                  readOnly
+                  onChange={() => {}}
+                  className="bg-transparent text-sm font-mono text-foreground outline-none w-full placeholder:text-muted-foreground/40 cursor-default select-all"
                 />
-                {isConnected && address && (
-                  <button
-                    data-testid="use-connected-address-btn"
-                    onClick={() => setDestinationAddress(isBsc ? evmToMxcAddress(address) : address)}
-                    className="self-start text-xs font-semibold text-primary hover:text-primary-hover transition-colors"
-                  >
-                    Use connected address
-                  </button>
-                )}
               </div>
             </div>
             {isDestinationInvalid && (
