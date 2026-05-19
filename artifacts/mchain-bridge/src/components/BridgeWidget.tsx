@@ -8,7 +8,7 @@ import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
 import { useBridge } from '../hooks/useBridge';
 import { useGasSubsidy } from '../hooks/useGasSubsidy';
 import { BridgeProgress } from './BridgeProgress';
-import { formatAmount, formatAddress, cn } from '../lib/utils';
+import { formatAmount, formatAddress, cn, evmToMxcAddress } from '../lib/utils';
 import { SiBinance } from 'react-icons/si';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
@@ -62,12 +62,15 @@ export function BridgeWidget() {
     }
   }, [chain?.id]);
 
-  // Pre-fill destination address with the connected wallet address
+  // Pre-fill destination address — MXC bech32 format when dest is MChain, 0x when dest is BSC
   useEffect(() => {
-    if (address) {
+    if (!address) return;
+    if (toChainId === mchain.id) {
+      setDestinationAddress(evmToMxcAddress(address));
+    } else {
       setDestinationAddress(address);
     }
-  }, [address]);
+  }, [address, toChainId]);
 
   const gasSubsidy = useGasSubsidy();
   const { step, error, txHash, handleBridge, reset: resetBridge, needsApproval } = useBridge(
@@ -320,7 +323,7 @@ export function BridgeWidget() {
                 <input
                   data-testid="destination-address-input"
                   type="text"
-                  placeholder={`0x... (your ${isBsc ? 'MChain' : 'BSC'} wallet address)`}
+                  placeholder={isBsc ? 'mxc1... (your MChain wallet address)' : '0x... (your BSC wallet address)'}
                   value={destinationAddress}
                   onChange={(e) => setDestinationAddress(e.target.value.trim())}
                   className="bg-transparent text-sm font-mono text-foreground outline-none w-full placeholder:text-muted-foreground/40"
@@ -328,7 +331,7 @@ export function BridgeWidget() {
                 {isConnected && address && (
                   <button
                     data-testid="use-connected-address-btn"
-                    onClick={() => setDestinationAddress(address)}
+                    onClick={() => setDestinationAddress(isBsc ? evmToMxcAddress(address) : address)}
                     className="self-start text-xs font-semibold text-primary hover:text-primary-hover transition-colors"
                   >
                     Use connected address

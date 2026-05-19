@@ -76,6 +76,7 @@
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.11",
+    "bech32": "^2.0.0",
     "viem": "^2.49.3",
     "wagmi": "^2.19.5"
   }
