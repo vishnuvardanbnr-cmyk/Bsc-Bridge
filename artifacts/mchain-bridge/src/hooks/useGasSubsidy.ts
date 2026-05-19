@@ -16,6 +16,9 @@ export type CheckResult = {
   needsGas: boolean;
   minimumAmount: string;
   sufficient: boolean;
+  liquidityCapReached: boolean;
+  bridgeBalance: string;
+  maxLiquidityUsd: number;
 };
 
 export function useGasSubsidy() {

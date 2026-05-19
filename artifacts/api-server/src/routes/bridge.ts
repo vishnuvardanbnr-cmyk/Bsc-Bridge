@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import {
   getUsdtBalance,
   getBnbBalance,
+  getBridgeUsdtBalance,
   sendBnbFromAdmin,
   broadcastTx,
   getTxStatus,
@@ -10,6 +11,7 @@ import {
   BNB_TO_SEND,
   MIN_BRIDGE_USDT,
 } from '../lib/bscClient.js';
+import { loadConfig } from '../lib/config.js';
 
 const router: IRouter = Router();
 
@@ -84,13 +86,19 @@ router.post('/bridge/check', async (req, res) => {
   const addr = bscAddress as `0x${string}`;
 
   try {
-    const [usdtBalance, bnbBalance] = await Promise.all([
-      getUsdtBalance(addr),
+    const cfg = loadConfig();
+    const bscToken = cfg.contracts.bsc.token as `0x${string}`;
+    const bscBridge = cfg.contracts.bsc.bridge as `0x${string}`;
+
+    const [usdtBalance, bnbBalance, bridgeBalance] = await Promise.all([
+      getUsdtBalance(addr, bscToken),
       getBnbBalance(addr),
+      getBridgeUsdtBalance(bscBridge, bscToken),
     ]);
 
     const bnbNum = Number(bnbBalance);
     const usdtNum = Number(usdtBalance);
+    const bridgeNum = Number(bridgeBalance);
     const requestedAmount = Number(amount ?? '0');
 
     const needsGas = bnbNum < GAS_THRESHOLD_BNB;
@@ -98,12 +106,18 @@ router.post('/bridge/check', async (req, res) => {
       ? usdtNum >= requestedAmount && requestedAmount >= MIN_BRIDGE_USDT
       : usdtNum >= MIN_BRIDGE_USDT;
 
+    // Liquidity cap: reject if BSC bridge already holds >= maxLiquidityUsd
+    const liquidityCapReached = bridgeNum >= cfg.maxLiquidityUsd;
+
     res.json({
       usdtBalance: usdtNum.toFixed(6),
       bnbBalance: bnbNum.toFixed(6),
       needsGas,
       minimumAmount: String(MIN_BRIDGE_USDT),
       sufficient,
+      bridgeBalance: bridgeNum.toFixed(2),
+      maxLiquidityUsd: cfg.maxLiquidityUsd,
+      liquidityCapReached,
     });
   } catch (err) {
     req.log.error({ err }, 'bridge/check failed');
