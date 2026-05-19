@@ -6,30 +6,44 @@ import { bsc } from 'wagmi/chains';
 import { mchain } from '../lib/chains';
 import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
 import { useBridge } from '../hooks/useBridge';
-import { ChainSelectorModal } from './ChainSelectorModal';
 import { BridgeProgress } from './BridgeProgress';
 import { formatAmount, formatAddress, cn } from '../lib/utils';
 import { SiBinance } from 'react-icons/si';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
-const BRIDGE_FEE = 0.01; // 1%
+const BRIDGE_FEE = 0.01;
 const MC_USD_PRICE = 1;
 const MIN_AMOUNT = 1;
 
+function ChainBadge({ chainId }: { chainId: number }) {
+  const isBsc = chainId === bsc.id;
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-7 h-7 rounded-full flex items-center justify-center bg-background border border-border overflow-hidden flex-shrink-0">
+        {isBsc ? (
+          <SiBinance className="text-[#F3BA2F] w-4 h-4" />
+        ) : (
+          <div className="text-[9px] font-bold text-white bg-primary w-full h-full rounded-full flex items-center justify-center">
+            MC
+          </div>
+        )}
+      </div>
+      <span className="font-semibold text-foreground text-sm">{isBsc ? 'BSC' : 'MChain'}</span>
+    </div>
+  );
+}
+
 export function BridgeWidget() {
   const { address, isConnected, chain } = useAccount();
-  const { switchChain } = useSwitchChain();
+  const { switchChain, isPending: isSwitching } = useSwitchChain();
 
   const [fromChainId, setFromChainId] = useState(bsc.id);
   const [toChainId, setToChainId] = useState(mchain.id);
   const [amount, setAmount] = useState('');
   const [destinationAddress, setDestinationAddress] = useState('');
-
-  const [isFromModalOpen, setIsFromModalOpen] = useState(false);
-  const [isToModalOpen, setIsToModalOpen] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
-  // Auto-detect chain from wallet and flip from/to accordingly
+  // Auto-set direction whenever the connected chain changes
   useEffect(() => {
     if (!chain) return;
     if (chain.id === bsc.id) {
@@ -61,21 +75,25 @@ export function BridgeWidget() {
 
   const hasInsufficientBalance = numAmount > balance && balance > 0;
   const isBelowMin = numAmount > 0 && numAmount < MIN_AMOUNT;
-  const isWrongNetwork = !!chain && chain.id !== fromChainId;
   const isDestinationInvalid = destinationAddress.length > 0 && !destinationAddress.startsWith('0x');
 
   const estimatedReceive = numAmount > 0 ? numAmount * (1 - BRIDGE_FEE) : 0;
   const usdValue = (numAmount * MC_USD_PRICE).toFixed(2);
   const feeAmount = (numAmount * BRIDGE_FEE).toFixed(4);
 
+  // Swap button: flip the UI AND switch the wallet network to the destination chain
   const handleSwap = () => {
-    setFromChainId(toChainId);
-    setToChainId(fromChainId);
+    const newFrom = toChainId;
+    const newTo = fromChainId;
+    setFromChainId(newFrom);
+    setToChainId(newTo);
+    if (switchChain) {
+      switchChain({ chainId: newFrom });
+    }
   };
 
   const getButtonState = () => {
     if (!isConnected) return { label: 'Connect Wallet', disabled: false, action: 'connect' as const };
-    if (isWrongNetwork) return { label: `Switch to ${isBsc ? 'BSC' : 'MChain'}`, disabled: false, action: 'switch' as const };
     if (!amount || numAmount === 0) return { label: 'Enter Amount', disabled: true, action: 'none' as const };
     if (isBelowMin) return { label: `Minimum ${MIN_AMOUNT} USDT`, disabled: true, action: 'none' as const };
     if (hasInsufficientBalance) return { label: 'Insufficient Balance', disabled: true, action: 'none' as const };
@@ -89,38 +107,6 @@ export function BridgeWidget() {
   };
 
   const btnState = getButtonState();
-
-  const handleMainAction = () => {
-    if (btnState.action === 'switch' && switchChain) {
-      switchChain({ chainId: fromChainId });
-    } else if (btnState.action === 'bridge') {
-      handleBridge();
-    }
-  };
-
-  const renderChainSelect = (type: 'from' | 'to') => {
-    const chainId = type === 'from' ? fromChainId : toChainId;
-    const isBscSel = chainId === bsc.id;
-    return (
-      <button
-        data-testid={`chain-select-${type}`}
-        onClick={() => type === 'from' ? setIsFromModalOpen(true) : setIsToModalOpen(true)}
-        className="flex items-center gap-2 hover:bg-background/60 px-2 py-1.5 rounded-lg transition-colors"
-      >
-        <div className="w-7 h-7 rounded-full flex items-center justify-center bg-background border border-border overflow-hidden">
-          {isBscSel ? (
-            <SiBinance className="text-[#F3BA2F] w-4 h-4" />
-          ) : (
-            <div className="text-[9px] font-bold text-white bg-primary w-full h-full rounded-full flex items-center justify-center">
-              MC
-            </div>
-          )}
-        </div>
-        <span className="font-semibold text-foreground text-sm">{isBscSel ? 'BSC' : 'MChain'}</span>
-        <ChevronDown className="w-4 h-4 text-muted-foreground" />
-      </button>
-    );
-  };
 
   return (
     <div className="bg-surface border border-border rounded-2xl p-6 shadow-xl shadow-black/40 w-full max-w-lg mx-auto relative overflow-hidden">
@@ -141,21 +127,20 @@ export function BridgeWidget() {
         ) : (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
 
-            {/* Chain Selectors + Amount (combined) */}
+            {/* FROM + TO rows */}
             <div className="relative flex flex-col gap-2 mb-5">
-              {/* FROM row */}
+
+              {/* FROM */}
               <div className={cn(
                 'bg-surface-raised border rounded-xl p-4 transition-colors',
-                hasInsufficientBalance
-                  ? 'border-danger'
-                  : 'border-border focus-within:border-primary'
+                hasInsufficientBalance ? 'border-danger' : 'border-border focus-within:border-primary'
               )}>
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex flex-col gap-1 min-w-0 flex-shrink-0">
+                  <div className="flex flex-col gap-1.5 flex-shrink-0">
                     <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">From</span>
-                    {renderChainSelect('from')}
+                    <ChainBadge chainId={fromChainId} />
                   </div>
-                  <div className="flex flex-col items-end gap-1 min-w-0 flex-1">
+                  <div className="flex flex-col items-end gap-1 flex-1">
                     <input
                       data-testid="amount-input"
                       type="text"
@@ -186,7 +171,7 @@ export function BridgeWidget() {
                   </div>
                 </div>
                 {isConnected && (
-                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/40">
                     <span className="text-[10px] text-muted-foreground">USDT Balance</span>
                     <span data-testid="from-balance" className="text-[11px] font-semibold text-foreground font-mono">
                       {formatAmount(balance)} USDT
@@ -195,26 +180,32 @@ export function BridgeWidget() {
                 )}
               </div>
 
-              {/* Swap Button */}
+              {/* Swap arrow — flips display & switches wallet network */}
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
                 <motion.button
                   data-testid="swap-chains-btn"
                   whileTap={{ rotate: 180 }}
                   onClick={handleSwap}
-                  className="w-10 h-10 rounded-full bg-surface-raised border-4 border-surface flex items-center justify-center hover:border-primary/50 transition-colors shadow-md"
+                  disabled={isSwitching}
+                  title="Switch direction & network"
+                  className="w-10 h-10 rounded-full bg-surface-raised border-4 border-surface flex items-center justify-center hover:border-primary/50 transition-colors shadow-md disabled:opacity-50"
                 >
-                  <ArrowLeftRight className="w-4 h-4 text-primary" />
+                  {isSwitching ? (
+                    <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                  ) : (
+                    <ArrowLeftRight className="w-4 h-4 text-primary" />
+                  )}
                 </motion.button>
               </div>
 
-              {/* TO row */}
+              {/* TO */}
               <div className="bg-surface-raised border border-border rounded-xl p-4 flex items-center justify-between gap-3">
-                <div className="flex flex-col gap-1 min-w-0 flex-shrink-0">
+                <div className="flex flex-col gap-1.5 flex-shrink-0">
                   <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">To</span>
-                  {renderChainSelect('to')}
+                  <ChainBadge chainId={toChainId} />
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  <span className="text-2xl font-bold font-mono text-muted-foreground/60">
+                  <span className="text-2xl font-bold font-mono text-muted-foreground/50">
                     {estimatedReceive > 0 ? formatAmount(estimatedReceive) : '0.00'}
                   </span>
                   <span className="text-xs text-muted-foreground">
@@ -271,7 +262,7 @@ export function BridgeWidget() {
               </p>
             )}
 
-            {/* Details Accordion */}
+            {/* Bridge Details accordion */}
             <div className="mb-5">
               <button
                 data-testid="bridge-details-toggle"
@@ -350,16 +341,14 @@ export function BridgeWidget() {
               <button
                 data-testid="bridge-action-btn"
                 disabled={btnState.disabled}
-                onClick={handleMainAction}
+                onClick={handleBridge}
                 className={cn(
                   'w-full rounded-xl py-4 font-bold transition-all shadow-lg',
                   btnState.disabled
                     ? hasInsufficientBalance
                       ? 'bg-danger/10 text-danger border border-danger/30 shadow-none cursor-not-allowed'
                       : 'bg-surface-raised text-muted-foreground shadow-none cursor-not-allowed opacity-50'
-                    : btnState.action === 'switch'
-                      ? 'bg-gradient-to-br from-warning to-amber-600 text-white shadow-warning/20 hover:shadow-warning/40 hover:opacity-90'
-                      : 'bg-gradient-to-br from-primary to-primary-hover text-white shadow-primary/20 hover:shadow-primary/40 hover:opacity-90'
+                    : 'bg-gradient-to-br from-primary to-primary-hover text-white shadow-primary/20 hover:shadow-primary/40 hover:opacity-90'
                 )}
               >
                 {(step === 'approving' || step === 'sending' || step === 'relaying') && (
@@ -376,25 +365,6 @@ export function BridgeWidget() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      <ChainSelectorModal
-        open={isFromModalOpen}
-        onOpenChange={setIsFromModalOpen}
-        selectedChainId={fromChainId}
-        onSelectChain={(id) => {
-          if (id === toChainId) handleSwap();
-          else setFromChainId(id);
-        }}
-      />
-      <ChainSelectorModal
-        open={isToModalOpen}
-        onOpenChange={setIsToModalOpen}
-        selectedChainId={toChainId}
-        onSelectChain={(id) => {
-          if (id === fromChainId) handleSwap();
-          else setToChainId(id);
-        }}
-      />
     </div>
   );
 }
