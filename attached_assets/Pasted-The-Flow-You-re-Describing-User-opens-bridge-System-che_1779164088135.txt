@@ -1,0 +1,128 @@
+The Flow You're Describing
+User opens bridge
+       ↓
+System checks: does user have ≥ minimum USDT?
+       ↓ YES
+Admin wallet sends 0.01$ worth of BNB → user's BSC address
+       ↓ (wait ~3s for BNB to land)
+App prompts: Enter your PIN to confirm bridge
+       ↓ User enters PIN
+PIN decrypts private key → signs the BSC bridge transaction
+       ↓
+Transaction broadcast → USDT locked on BSC
+       ↓
+Relayer mints USDT on MChain → done
+
+How Each Step Works Technically
+Step 1 — Balance Check (your API server)
+GET /bridge/check
+Body: { bscAddress, amount }
+Response:
+{
+  usdtBalance: "150.00",       // user's USDT-BEP20 balance
+  bnbBalance: "0.00",          // user's BNB balance
+  needsGas: true,              // BNB < threshold
+  minimumAmount: "1.00",       // minimum bridge amount
+  sufficient: true             // USDT balance ≥ amount
+}
+
+Step 2 — Admin Sends Gas (your API server, never exposed to client)
+POST /bridge/fund-gas
+Body: { bscAddress }
+Server-side only:
+- Admin wallet (stored in env var BRIDGE_ADMIN_PRIVATE_KEY) signs a BNB transfer
+- Sends exactly enough BNB to cover 1 approve tx + 1 bridge tx (~0.002 BNB)
+- Returns txHash + estimated confirmation time
+Response:
+{
+  funded: true,
+  gasTxHash: "0xabc...",
+  bnbSent: "0.002",
+  waitMs: 3000
+}
+
+Critical: This endpoint must be rate-limited and authenticated — otherwise anyone can drain your admin wallet by hitting it repeatedly. Rate limit: 1 gas fund per BSC address per 24 hours.
+
+Step 3 — PIN Entry (existing wallet PIN modal)
+Reuse your existing PinModal from the wallet app. The PIN decrypts the user's private key (from SecureStore or NFC card). The private key is held in memory only for the duration of signing — never sent to your server.
+
+Step 4 — Client Signs the Transaction Locally
+Private key (decrypted by PIN)
+  ↓
+Sign: ERC-20 approve(bridgeContract, amount)   ← if first time
+Sign: bridge(amount, destinationMxcAddress)    ← the bridge call
+  ↓
+Send signed raw transactions to your API relay
+  ↓
+API broadcasts both to BSC RPC
+
+The private key never leaves the device. Your server only receives already-signed raw transactions (0x... hex strings).
+
+Step 5 — Relay & Mint on MChain
+Your relayer watches BSC for the BridgeInitiated event, then calls the MChain contract to release/mint USDT to the user's MChain address.
+
+The Security Risk You Must Handle
+The gas subsidy endpoint is the main attack surface:
+
+Attack	Protection
+Someone calls /fund-gas repeatedly to drain admin wallet	Rate limit: 1 per address per 24h, stored in your DB
+Someone funds gas but never bridges (wastes your BNB)	Only fund if USDT balance ≥ minimum bridge amount, verified server-side
+Man-in-the-middle swaps destination address	Destination address included in the signed transaction — server cannot change it
+Replay attack with old signed tx	Nonce in the signed tx — once broadcast, nonce is consumed
+What You Need to Build
+API Server (3 new endpoints):
+
+POST /bridge/check          → check USDT + BNB balance
+POST /bridge/fund-gas       → admin sends BNB (rate-limited)
+POST /bridge/broadcast      → receive signed raw txs, broadcast to BSC
+GET  /bridge/status/:txHash → poll bridge relay status
+
+Mobile UI (new screen):
+
+1. Amount input + "Bridge" button
+2. Loading: "Checking your balance…"
+3. Loading: "Funding gas for your transaction…"
+4. PIN modal: "Enter PIN to confirm bridge of X USDT"
+5. Loading: "Broadcasting transaction…"
+6. Progress: Step tracker (Approve → Send → Relay → Done)
+7. Success / Failure screen
+
+Complete Flow Diagram
+Mobile App                    Your API Server              BSC Network
+──────────────────────────────────────────────────────────────────────
+Enter 100 USDT to bridge
+        │
+        ├──POST /bridge/check──────────────────►
+        │                                       Check USDT balance
+        │◄─────────────{ sufficient: true }─────┤
+        │                                       Check BNB balance
+        │                                       needsGas: true
+        │
+        ├──POST /bridge/fund-gas───────────────►
+        │                                       Admin wallet signs BNB tx
+        │                                       Broadcast to BSC
+        │◄────────────{ funded: true }───────────┤
+        │
+   Wait ~3s for BNB confirmation
+        │
+   Show PIN modal
+   User enters PIN
+   PIN decrypts private key (LOCAL)
+   Sign approve tx (LOCAL)
+   Sign bridge tx  (LOCAL)
+   Private key wiped from memory
+        │
+        ├──POST /bridge/broadcast──────────────►
+        │   { signedApproveTx, signedBridgeTx } Broadcast both txs
+        │◄────────────{ txHash }─────────────────┤
+        │
+   Poll GET /bridge/status/:txHash every 5s
+        │
+        │                                       Relayer detects event
+        │                                       Mints USDT on MChain
+        │◄────────────{ status: "complete" }─────┤
+        │
+   Show success screen
+
+One Important UX Note
+Between "funding gas" and "showing the PIN modal" — wait for the BNB transaction to get at least 1 confirmation before asking for the PIN and signing. If you ask for the PIN while BNB is still pending and the user signs immediately, the approve transaction might fail with "insufficient gas". A 3–5 second wait with a progress animation is enough for BSC's ~3 second block time.

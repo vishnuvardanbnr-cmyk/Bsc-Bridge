@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useBalance, useSwitchChain } from 'wagmi';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeftRight, Clock, ExternalLink, ChevronDown, AlertTriangle } from 'lucide-react';
+import { ArrowLeftRight, Clock, ExternalLink, ChevronDown, AlertTriangle, Fuel, CheckCircle2 } from 'lucide-react';
 import { bsc } from 'wagmi/chains';
 import { mchain } from '../lib/chains';
 import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
 import { useBridge } from '../hooks/useBridge';
+import { useGasSubsidy } from '../hooks/useGasSubsidy';
 import { BridgeProgress } from './BridgeProgress';
 import { formatAmount, formatAddress, cn } from '../lib/utils';
 import { SiBinance } from 'react-icons/si';
@@ -33,6 +34,12 @@ function ChainBadge({ chainId }: { chainId: number }) {
   );
 }
 
+const GAS_STEP_LABELS: Record<string, string> = {
+  checking: 'Checking your balance…',
+  funding: 'Sending gas to your wallet…',
+  'waiting-bnb': 'Waiting for BNB to confirm…',
+};
+
 export function BridgeWidget() {
   const { address, isConnected, chain } = useAccount();
   const { switchChain, isPending: isSwitching } = useSwitchChain();
@@ -55,7 +62,8 @@ export function BridgeWidget() {
     }
   }, [chain?.id]);
 
-  const { step, error, txHash, handleBridge, reset, needsApproval } = useBridge(
+  const gasSubsidy = useGasSubsidy();
+  const { step, error, txHash, handleBridge, reset: resetBridge, needsApproval } = useBridge(
     fromChainId, toChainId, amount, destinationAddress
   );
 
@@ -81,16 +89,33 @@ export function BridgeWidget() {
   const usdValue = (numAmount * MC_USD_PRICE).toFixed(2);
   const feeAmount = (numAmount * BRIDGE_FEE).toFixed(4);
 
-  // Swap button: flip the UI AND switch the wallet network to the destination chain
   const handleSwap = () => {
     const newFrom = toChainId;
-    const newTo = fromChainId;
     setFromChainId(newFrom);
-    setToChainId(newTo);
-    if (switchChain) {
-      switchChain({ chainId: newFrom });
-    }
+    setToChainId(fromChainId);
+    if (switchChain) switchChain({ chainId: newFrom });
   };
+
+  const handleReset = () => {
+    resetBridge();
+    gasSubsidy.reset();
+  };
+
+  // Main bridge action — runs gas check/fund first (BSC only), then bridge
+  const handleStart = async () => {
+    if (!address) return;
+
+    // Only do gas subsidy check on BSC side (MChain has native gas)
+    if (isBsc) {
+      const ready = await gasSubsidy.ensureGas(address, amount);
+      if (!ready) return;
+    }
+
+    handleBridge();
+  };
+
+  const isGasLoading = gasSubsidy.isActive;
+  const bridgeInProgress = step !== 'idle';
 
   const getButtonState = () => {
     if (!isConnected) return { label: 'Connect Wallet', disabled: false, action: 'connect' as const };
@@ -99,9 +124,7 @@ export function BridgeWidget() {
     if (hasInsufficientBalance) return { label: 'Insufficient Balance', disabled: true, action: 'none' as const };
     if (!destinationAddress || destinationAddress.length < 10) return { label: 'Enter Destination Address', disabled: true, action: 'none' as const };
     if (isDestinationInvalid) return { label: 'Invalid Destination Address', disabled: true, action: 'none' as const };
-    if (step === 'approving') return { label: 'Approving…', disabled: true, action: 'none' as const };
-    if (step === 'sending') return { label: 'Bridging…', disabled: true, action: 'none' as const };
-    if (step === 'relaying') return { label: 'Waiting for Confirmation…', disabled: true, action: 'none' as const };
+    if (isGasLoading) return { label: GAS_STEP_LABELS[gasSubsidy.step] ?? 'Preparing…', disabled: true, action: 'none' as const };
     if (needsApproval) return { label: 'Approve & Bridge', disabled: false, action: 'bridge' as const };
     return { label: `Bridge ${formatAmount(numAmount)} USDT`, disabled: false, action: 'bridge' as const };
   };
@@ -111,7 +134,76 @@ export function BridgeWidget() {
   return (
     <div className="bg-surface border border-border rounded-2xl p-6 shadow-xl shadow-black/40 w-full max-w-lg mx-auto relative overflow-hidden">
       <AnimatePresence mode="wait">
-        {step !== 'idle' ? (
+
+        {/* Gas subsidy loading overlay */}
+        {isGasLoading && (
+          <motion.div
+            key="gas-loading"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-surface/95 rounded-2xl z-20 flex flex-col items-center justify-center gap-4 p-8"
+          >
+            <div className="w-14 h-14 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+              <Fuel className="w-6 h-6 text-primary" />
+            </div>
+            <div className="text-center">
+              <p className="font-bold text-foreground mb-1">
+                {GAS_STEP_LABELS[gasSubsidy.step] ?? 'Preparing…'}
+              </p>
+              {gasSubsidy.step === 'funding' && (
+                <p className="text-xs text-muted-foreground">
+                  Admin wallet is sending BNB for gas fees
+                </p>
+              )}
+              {gasSubsidy.step === 'waiting-bnb' && (
+                <p className="text-xs text-muted-foreground">
+                  Waiting ~1 block for BNB to confirm before signing
+                </p>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              {['checking', 'funding', 'waiting-bnb'].map((s, i) => {
+                const steps = ['checking', 'funding', 'waiting-bnb'];
+                const idx = steps.indexOf(gasSubsidy.step);
+                return (
+                  <div
+                    key={s}
+                    className={cn(
+                      'w-2 h-2 rounded-full transition-colors',
+                      i <= idx ? 'bg-primary' : 'bg-border'
+                    )}
+                  />
+                );
+              })}
+            </div>
+            {gasSubsidy.gasTxHash && (
+              <p className="text-[10px] font-mono text-muted-foreground">
+                Gas tx: {formatAddress(gasSubsidy.gasTxHash)}
+              </p>
+            )}
+          </motion.div>
+        )}
+
+        {/* Gas subsidy error banner */}
+        {gasSubsidy.step === 'error' && gasSubsidy.error && (
+          <motion.div
+            key="gas-error"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute top-4 left-4 right-4 z-20 bg-danger/10 border border-danger/30 rounded-xl p-3 flex items-center justify-between gap-2"
+          >
+            <div className="flex items-center gap-2 text-danger text-xs font-semibold">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              {gasSubsidy.error}
+            </div>
+            <button onClick={gasSubsidy.reset} className="text-danger hover:text-danger/70 text-xs underline flex-shrink-0">
+              Dismiss
+            </button>
+          </motion.div>
+        )}
+
+        {bridgeInProgress ? (
           <motion.div key="progress" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <BridgeProgress
               step={step}
@@ -121,7 +213,7 @@ export function BridgeWidget() {
               txHash={txHash}
               error={error}
               destinationAddress={destinationAddress}
-              onReset={reset}
+              onReset={handleReset}
             />
           </motion.div>
         ) : (
@@ -129,7 +221,6 @@ export function BridgeWidget() {
 
             {/* FROM + TO rows */}
             <div className="relative flex flex-col gap-2 mb-5">
-
               {/* FROM */}
               <div className={cn(
                 'bg-surface-raised border rounded-xl p-4 transition-colors',
@@ -180,7 +271,7 @@ export function BridgeWidget() {
                 )}
               </div>
 
-              {/* Swap arrow — flips display & switches wallet network */}
+              {/* Swap — flips display AND switches wallet network */}
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
                 <motion.button
                   data-testid="swap-chains-btn"
@@ -190,11 +281,10 @@ export function BridgeWidget() {
                   title="Switch direction & network"
                   className="w-10 h-10 rounded-full bg-surface-raised border-4 border-surface flex items-center justify-center hover:border-primary/50 transition-colors shadow-md disabled:opacity-50"
                 >
-                  {isSwitching ? (
-                    <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                  ) : (
-                    <ArrowLeftRight className="w-4 h-4 text-primary" />
-                  )}
+                  {isSwitching
+                    ? <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    : <ArrowLeftRight className="w-4 h-4 text-primary" />
+                  }
                 </motion.button>
               </div>
 
@@ -262,6 +352,14 @@ export function BridgeWidget() {
               </p>
             )}
 
+            {/* Gas subsidy info — shown when connected on BSC */}
+            {isConnected && isBsc && gasSubsidy.checkResult && !gasSubsidy.checkResult.needsGas && (
+              <div className="flex items-center gap-2 text-xs text-success mb-4">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Gas balance OK — you have enough BNB</span>
+              </div>
+            )}
+
             {/* Bridge Details accordion */}
             <div className="mb-5">
               <button
@@ -302,6 +400,14 @@ export function BridgeWidget() {
                           {isBsc ? 'BSC → MChain' : 'MChain → BSC'}
                         </span>
                       </div>
+                      {isBsc && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-[12px] text-muted-foreground">Gas Subsidy</span>
+                          <span className="text-[13px] font-semibold text-success flex items-center gap-1">
+                            <Fuel className="w-3 h-3" /> Auto-funded if needed
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center">
                         <span className="text-[12px] text-muted-foreground">Contract</span>
                         <a
@@ -341,7 +447,7 @@ export function BridgeWidget() {
               <button
                 data-testid="bridge-action-btn"
                 disabled={btnState.disabled}
-                onClick={handleBridge}
+                onClick={handleStart}
                 className={cn(
                   'w-full rounded-xl py-4 font-bold transition-all shadow-lg',
                   btnState.disabled
@@ -351,7 +457,7 @@ export function BridgeWidget() {
                     : 'bg-gradient-to-br from-primary to-primary-hover text-white shadow-primary/20 hover:shadow-primary/40 hover:opacity-90'
                 )}
               >
-                {(step === 'approving' || step === 'sending' || step === 'relaying') && (
+                {isGasLoading && (
                   <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2 align-middle" />
                 )}
                 {btnState.label}
