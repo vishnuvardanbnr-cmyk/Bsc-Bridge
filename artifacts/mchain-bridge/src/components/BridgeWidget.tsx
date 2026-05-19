@@ -141,21 +141,55 @@ export function BridgeWidget() {
         ) : (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
 
-            {/* Chain Selectors */}
+            {/* Chain Selectors + Amount (combined) */}
             <div className="relative flex flex-col gap-2 mb-5">
-              <div className="bg-surface-raised border border-border rounded-xl p-4 flex justify-between items-center">
-                <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">From</span>
-                  {renderChainSelect('from')}
+              {/* FROM row */}
+              <div className={cn(
+                'bg-surface-raised border rounded-xl p-4 transition-colors',
+                hasInsufficientBalance
+                  ? 'border-danger'
+                  : 'border-border focus-within:border-primary'
+              )}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1 min-w-0 flex-shrink-0">
+                    <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">From</span>
+                    {renderChainSelect('from')}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 min-w-0 flex-1">
+                    <input
+                      data-testid="amount-input"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={amount}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                        if (val.split('.').length > 2) return;
+                        setAmount(val);
+                      }}
+                      className="bg-transparent text-right text-2xl font-bold font-mono text-foreground outline-none w-full placeholder:text-muted-foreground/40"
+                    />
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {numAmount > 0 ? `~$${usdValue}` : '$0.00'}
+                      </span>
+                      {isConnected && (
+                        <button
+                          data-testid="max-btn"
+                          onClick={() => setAmount(balance.toFixed(6))}
+                          className="text-[10px] font-bold text-primary hover:text-primary-hover bg-primary/10 px-2 py-0.5 rounded transition-colors"
+                        >
+                          MAX
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 {isConnected && (
-                  <div className="text-right">
-                    <span className="text-[10px] text-muted-foreground block mb-0.5">USDT Balance</span>
-                    <span
-                      data-testid="from-balance"
-                      className="text-sm font-semibold text-foreground font-mono"
-                    >
-                      {formatAmount(balance)}
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
+                    <span className="text-[10px] text-muted-foreground">USDT Balance</span>
+                    <span data-testid="from-balance" className="text-[11px] font-semibold text-foreground font-mono">
+                      {formatAmount(balance)} USDT
                     </span>
                   </div>
                 )}
@@ -173,51 +207,20 @@ export function BridgeWidget() {
                 </motion.button>
               </div>
 
-              <div className="bg-surface-raised border border-border rounded-xl p-4 flex justify-between items-center">
-                <div className="flex flex-col gap-1">
+              {/* TO row */}
+              <div className="bg-surface-raised border border-border rounded-xl p-4 flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-1 min-w-0 flex-shrink-0">
                   <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">To</span>
                   {renderChainSelect('to')}
                 </div>
-              </div>
-            </div>
-
-            {/* Amount Input */}
-            <div className={cn(
-              'bg-surface-raised border rounded-xl p-4 mb-3 transition-colors',
-              hasInsufficientBalance
-                ? 'border-danger focus-within:border-danger'
-                : 'border-border focus-within:border-primary'
-            )}>
-              <div className="flex justify-between items-center mb-2">
-                <div className="flex items-center gap-2 bg-background px-3 py-1.5 rounded-lg border border-border">
-                  <div className="w-4 h-4 rounded-sm bg-[#26A17B] flex items-center justify-center text-[8px] font-bold text-white">₮</div>
-                  <span className="font-semibold text-sm">USDT</span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="text-2xl font-bold font-mono text-muted-foreground/60">
+                    {estimatedReceive > 0 ? formatAmount(estimatedReceive) : '0.00'}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {estimatedReceive > 0 ? `~$${(estimatedReceive * MC_USD_PRICE).toFixed(2)}` : '$0.00'}
+                  </span>
                 </div>
-                <input
-                  data-testid="amount-input"
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9.]/g, '');
-                    if (val.split('.').length > 2) return;
-                    setAmount(val);
-                  }}
-                  className="bg-transparent text-right text-2xl font-bold font-mono text-foreground outline-none w-1/2 placeholder:text-muted-foreground/40"
-                />
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">
-                  {numAmount > 0 ? `~$${usdValue}` : '$0.00'}
-                </span>
-                <button
-                  data-testid="max-btn"
-                  onClick={() => setAmount(balance.toFixed(6))}
-                  className="text-xs font-bold text-primary hover:text-primary-hover bg-primary/10 px-2 py-1 rounded-md transition-colors"
-                >
-                  MAX
-                </button>
               </div>
             </div>
 
@@ -267,24 +270,6 @@ export function BridgeWidget() {
                 <AlertTriangle className="w-3 h-3" /> Invalid EVM address
               </p>
             )}
-
-            {/* You Receive */}
-            <div className="bg-background border border-border/50 rounded-xl p-4 mb-5">
-              <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase block mb-2">
-                You receive (estimated)
-              </span>
-              <div className="flex justify-between items-baseline">
-                <span className="text-lg font-bold text-foreground font-mono">
-                  ~ {formatAmount(estimatedReceive)} USDT
-                </span>
-                <span className="text-sm text-muted-foreground font-mono">
-                  ~${(estimatedReceive * MC_USD_PRICE).toFixed(2)}
-                </span>
-              </div>
-              <span className="text-xs text-muted-foreground mt-1.5 block">
-                1% bridge fee applied · Amount may vary
-              </span>
-            </div>
 
             {/* Details Accordion */}
             <div className="mb-5">
