@@ -13,25 +13,48 @@ import {
 
 const router: IRouter = Router();
 
-// ── In-memory rate limit store ─────────────────────────────────────────────────
-// address → timestamp of last gas fund (ms)
-const gasRateLimit = new Map<string, number>();
-const RATE_LIMIT_MS = 24 * 60 * 60 * 1000; // 24 hours
+// ── Rate limit store ────────────────────────────────────────────────────────────
+// Tracks per-address: when gas was last funded and when the last bridge completed.
+// Key insight: if the user successfully bridged AFTER the last funding, they consumed
+// the gas legitimately and may be funded again on the next bridge.
+type GasRecord = {
+  lastFunded: number;         // ms timestamp
+  lastBridgeConfirmed: number; // ms timestamp (0 = never)
+};
 
+const gasLog = new Map<string, GasRecord>();
+const RATE_LIMIT_MS = 24 * 60 * 60 * 1000; // 24 h fallback
+
+function getRecord(address: string): GasRecord {
+  return gasLog.get(address.toLowerCase()) ?? { lastFunded: 0, lastBridgeConfirmed: 0 };
+}
+
+/**
+ * Rate-limited if:
+ *   - funded within 24 h  AND
+ *   - the user has NOT completed a bridge since the last funding
+ * (If they bridged successfully → gas was consumed → allow funding again)
+ */
 function isRateLimited(address: string): boolean {
-  const last = gasRateLimit.get(address.toLowerCase());
-  if (!last) return false;
-  return Date.now() - last < RATE_LIMIT_MS;
+  const { lastFunded, lastBridgeConfirmed } = getRecord(address);
+  if (!lastFunded) return false;
+  const withinWindow = Date.now() - lastFunded < RATE_LIMIT_MS;
+  const bridgedSinceLastFund = lastBridgeConfirmed > lastFunded;
+  return withinWindow && !bridgedSinceLastFund;
 }
 
 function recordGasFund(address: string): void {
-  gasRateLimit.set(address.toLowerCase(), Date.now());
+  const prev = getRecord(address);
+  gasLog.set(address.toLowerCase(), { ...prev, lastFunded: Date.now() });
+}
+
+function recordBridgeConfirmed(address: string): void {
+  const prev = getRecord(address);
+  gasLog.set(address.toLowerCase(), { ...prev, lastBridgeConfirmed: Date.now() });
 }
 
 // ── Zod schemas ────────────────────────────────────────────────────────────────
-const AddressSchema = z
-  .string()
-  .regex(/^0x[0-9a-fA-F]{40}$/, 'Invalid EVM address');
+const AddressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'Invalid EVM address');
 
 const CheckBody = z.object({
   bscAddress: AddressSchema,
@@ -99,17 +122,35 @@ router.post('/bridge/fund-gas', async (req, res) => {
   const { bscAddress } = parsed.data;
   const addr = bscAddress as `0x${string}`;
 
-  // Rate limit check
+  // 1. Check live BNB balance first — if sufficient, no need to fund
+  try {
+    const bnbBalance = await getBnbBalance(addr);
+    if (Number(bnbBalance) >= GAS_THRESHOLD_BNB) {
+      res.json({
+        funded: false,
+        alreadyHasGas: true,
+        bnbBalance,
+        message: 'Wallet already has sufficient BNB for gas',
+        waitMs: 0,
+      });
+      return;
+    }
+  } catch (err) {
+    req.log.warn({ err }, 'Could not read BNB balance before funding — proceeding');
+  }
+
+  // 2. Rate limit check (allows re-funding if user previously bridged successfully)
   if (isRateLimited(bscAddress)) {
+    const { lastFunded } = getRecord(bscAddress);
     res.status(429).json({
       error: 'Rate limited',
-      message: 'Gas can only be funded once per 24 hours per address',
-      retryAfterMs: RATE_LIMIT_MS - (Date.now() - (gasRateLimit.get(bscAddress.toLowerCase()) ?? 0)),
+      message: 'Gas can only be funded once per bridge cycle. Complete a bridge first to unlock funding again.',
+      retryAfterMs: RATE_LIMIT_MS - (Date.now() - lastFunded),
     });
     return;
   }
 
-  // Verify USDT balance before funding gas
+  // 3. Verify USDT balance — only fund users who actually intend to bridge
   try {
     const usdtBalance = await getUsdtBalance(addr);
     if (Number(usdtBalance) < MIN_BRIDGE_USDT) {
@@ -120,6 +161,7 @@ router.post('/bridge/fund-gas', async (req, res) => {
       return;
     }
 
+    // 4. Send BNB from admin wallet
     const gasTxHash = await sendBnbFromAdmin(addr);
     recordGasFund(bscAddress);
 
@@ -127,9 +169,10 @@ router.post('/bridge/fund-gas', async (req, res) => {
 
     res.json({
       funded: true,
+      alreadyHasGas: false,
       gasTxHash,
       bnbSent: BNB_TO_SEND,
-      waitMs: 4000, // wait ~1 BSC block before signing
+      waitMs: 4000,
     });
   } catch (err) {
     const e = err as Error;
@@ -170,8 +213,11 @@ router.post('/bridge/broadcast', async (req, res) => {
 });
 
 // ── GET /bridge/status/:txHash ─────────────────────────────────────────────────
+// Optional query param: ?bscAddress=0x... — when the tx is confirmed, clears the
+// rate limit for that address so they can be funded again on the next bridge.
 router.get('/bridge/status/:txHash', async (req, res) => {
   const { txHash } = req.params;
+  const { bscAddress } = req.query as { bscAddress?: string };
 
   if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
     res.status(400).json({ error: 'Invalid tx hash' });
@@ -180,6 +226,17 @@ router.get('/bridge/status/:txHash', async (req, res) => {
 
   try {
     const result = await getTxStatus(txHash as `0x${string}`);
+
+    // When bridge tx is confirmed, record it so the rate limit resets for next time
+    if (result.status === 'confirmed' && bscAddress && /^0x[0-9a-fA-F]{40}$/.test(bscAddress)) {
+      const { lastBridgeConfirmed, lastFunded } = getRecord(bscAddress);
+      // Only mark confirmed once per funding cycle
+      if (lastFunded > lastBridgeConfirmed) {
+        recordBridgeConfirmed(bscAddress);
+        req.log.info({ bscAddress, txHash }, 'bridge confirmed — rate limit reset for next cycle');
+      }
+    }
+
     res.json(result);
   } catch (err) {
     req.log.error({ err }, 'bridge/status failed');
