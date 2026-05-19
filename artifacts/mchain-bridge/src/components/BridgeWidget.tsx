@@ -62,6 +62,13 @@ export function BridgeWidget() {
     }
   }, [chain?.id]);
 
+  // Pre-fill destination address with the connected wallet address
+  useEffect(() => {
+    if (address) {
+      setDestinationAddress(address);
+    }
+  }, [address]);
+
   const gasSubsidy = useGasSubsidy();
   const { step, error, txHash, handleBridge, reset: resetBridge, needsApproval } = useBridge(
     fromChainId, toChainId, amount, destinationAddress
