@@ -13,7 +13,7 @@ import { SiBinance } from 'react-icons/si';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 const BRIDGE_FEE = 0.01; // 1%
-const MC_USD_PRICE = 0.05;
+const MC_USD_PRICE = 1;
 const MIN_AMOUNT = 1;
 
 export function BridgeWidget() {
