@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useBalance, useSwitchChain } from 'wagmi';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeftRight, Clock, ExternalLink, ChevronDown, AlertTriangle, Fuel, CheckCircle2 } from 'lucide-react';
+import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2 } from 'lucide-react';
 import { bsc } from 'wagmi/chains';
 import { mchain } from '../lib/chains';
 import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
@@ -48,7 +48,7 @@ export function BridgeWidget() {
   const [toChainId, setToChainId] = useState(mchain.id);
   const [amount, setAmount] = useState('');
   const [destinationAddress, setDestinationAddress] = useState('');
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
 
   // Auto-set direction whenever the connected chain changes
   useEffect(() => {
@@ -345,28 +345,10 @@ export function BridgeWidget() {
               </div>
             )}
 
-            {/* Bridge Details accordion */}
+            {/* Bridge Details — always visible */}
             <div className="mb-5">
-              <button
-                data-testid="bridge-details-toggle"
-                onClick={() => setIsDetailsOpen(!isDetailsOpen)}
-                className="flex items-center justify-between w-full py-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <span>Bridge Details</span>
-                <motion.div animate={{ rotate: isDetailsOpen ? 180 : 0 }}>
-                  <ChevronDown className="w-4 h-4" />
-                </motion.div>
-              </button>
-
-              <AnimatePresence>
-                {isDetailsOpen && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="pt-2 flex flex-col gap-3 pb-1">
+              <p className="py-2 text-sm font-semibold text-muted-foreground">Bridge Details</p>
+              <div className="flex flex-col gap-3 pb-1">
                       <div className="flex justify-between items-center">
                         <span className="text-[12px] text-muted-foreground">Bridge Fee</span>
                         <span className="text-[13px] font-semibold text-foreground">
@@ -409,10 +391,7 @@ export function BridgeWidget() {
                         <span className="text-[12px] text-muted-foreground">Token</span>
                         <span className="text-[13px] font-semibold text-foreground">USDT</span>
                       </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              </div>
             </div>
 
             {/* Action Button */}
