@@ -271,23 +271,6 @@ export function BridgeWidget() {
                 )}
               </div>
 
-              {/* Swap — flips display AND switches wallet network */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-                <motion.button
-                  data-testid="swap-chains-btn"
-                  whileTap={{ rotate: 180 }}
-                  onClick={handleSwap}
-                  disabled={isSwitching}
-                  title="Switch direction & network"
-                  className="w-10 h-10 rounded-full bg-surface-raised border-4 border-surface flex items-center justify-center hover:border-primary/50 transition-colors shadow-md disabled:opacity-50"
-                >
-                  {isSwitching
-                    ? <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                    : <ArrowLeftRight className="w-4 h-4 text-primary" />
-                  }
-                </motion.button>
-              </div>
-
               {/* TO */}
               <div className="bg-surface-raised border border-border rounded-xl p-4 flex items-center justify-between gap-3">
                 <div className="flex flex-col gap-1.5 flex-shrink-0">
