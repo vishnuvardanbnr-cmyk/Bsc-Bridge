@@ -155,6 +155,9 @@ export default function AdminPage() {
   const [maxLiquidity, setMaxLiquidity] = useState('');
   const [gasKey, setGasKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPwd, setShowNewPwd] = useState(false);
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok });
@@ -194,6 +197,39 @@ export default function AdminPage() {
   useEffect(() => {
     if (authed) loadAll();
   }, [authed, loadAll]);
+
+  async function handleChangePassword() {
+    if (newPassword !== confirmPassword) {
+      showToast('Passwords do not match', false);
+      return;
+    }
+    if (newPassword.length < 6) {
+      showToast('Password must be at least 6 characters', false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/admin/config`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ adminPassword: newPassword }),
+      });
+      if (!res.ok) {
+        showToast('Failed to update password', false);
+        return;
+      }
+      // Update session so the user stays logged in with the new password
+      setPassword(newPassword);
+      sessionStorage.setItem('adminPwd', newPassword);
+      setNewPassword('');
+      setConfirmPassword('');
+      showToast('Password changed', true);
+    } catch {
+      showToast('Failed to update password', false);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -407,6 +443,59 @@ export default function AdminPage() {
                   Leave blank to keep the current key unchanged.
                 </p>
               </div>
+            </div>
+          </Section>
+        </div>
+
+        {/* Change password */}
+        <div className="bg-surface border border-border rounded-2xl p-6 flex flex-col gap-6">
+          <Section title="Change Admin Password">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+                  New Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPwd ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    className="w-full bg-surface-raised border border-border rounded-lg px-3 py-2.5 pr-10 text-sm text-foreground outline-none focus:border-primary transition-colors placeholder:text-muted-foreground/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPwd(!showNewPwd)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat new password"
+                  className="w-full bg-surface-raised border border-border rounded-lg px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary transition-colors placeholder:text-muted-foreground/40"
+                />
+              </div>
+              {newPassword && confirmPassword && newPassword !== confirmPassword && (
+                <p className="text-danger text-xs font-semibold flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" /> Passwords do not match
+                </p>
+              )}
+              <button
+                onClick={handleChangePassword}
+                disabled={saving || !newPassword || !confirmPassword}
+                className="flex items-center justify-center gap-2 bg-surface-raised hover:bg-border disabled:opacity-40 border border-border text-foreground font-semibold rounded-xl py-2.5 text-sm transition-colors mt-1"
+              >
+                {saving ? 'Saving…' : 'Update Password'}
+              </button>
             </div>
           </Section>
         </div>
