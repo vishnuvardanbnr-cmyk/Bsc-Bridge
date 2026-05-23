@@ -14,6 +14,8 @@ export type AppConfig = {
   };
   maxLiquidityUsd: number;
   gasWalletPrivateKey: string; // empty string = fall back to env var BRIDGE_ADMIN_PRIVATE_KEY
+  telegramBotToken: string;
+  telegramChatIds: string[]; // list of chat IDs to notify
 };
 
 const DEFAULTS: AppConfig = {
@@ -30,6 +32,8 @@ const DEFAULTS: AppConfig = {
   },
   maxLiquidityUsd: 10000,
   gasWalletPrivateKey: '',
+  telegramBotToken: '',
+  telegramChatIds: [],
 };
 
 let _cache: AppConfig | null = null;

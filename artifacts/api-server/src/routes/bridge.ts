@@ -12,6 +12,7 @@ import {
   MIN_BRIDGE_USDT,
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
+import { maybeSendLiquidityAlert } from '../lib/telegram.js';
 
 const router: IRouter = Router();
 
@@ -108,6 +109,9 @@ router.post('/bridge/check', async (req, res) => {
 
     // Liquidity cap: reject if BSC bridge already holds >= maxLiquidityUsd
     const liquidityCapReached = bridgeNum >= cfg.maxLiquidityUsd;
+
+    // Fire-and-forget: alert if bridge balance >= 90% of cap
+    maybeSendLiquidityAlert(bridgeNum).catch(() => {});
 
     res.json({
       usdtBalance: usdtNum.toFixed(6),

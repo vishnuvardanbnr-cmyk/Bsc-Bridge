@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Eye, EyeOff, Save, RefreshCw, Lock, CheckCircle2, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { Eye, EyeOff, Save, RefreshCw, Lock, CheckCircle2, AlertTriangle, ArrowLeft, Send, Bell } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const API = '/api';
@@ -12,6 +12,8 @@ type Config = {
   maxLiquidityUsd: number;
   gasWalletKeyConfigured: boolean;
   gasWalletKeySource: 'config' | 'env' | 'none';
+  telegramBotToken: string;
+  telegramChatIds: string[];
 };
 
 type LiquidityInfo = {
@@ -158,6 +160,10 @@ export default function AdminPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNewPwd, setShowNewPwd] = useState(false);
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatIds, setTelegramChatIds] = useState('');
+  const [showTgToken, setShowTgToken] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok });
@@ -187,6 +193,8 @@ export default function AdminPage() {
       setMchainBridge(cfg.contracts.mchain.bridge);
       setMchainToken(cfg.contracts.mchain.token);
       setMaxLiquidity(String(cfg.maxLiquidityUsd));
+      setTelegramToken(cfg.telegramBotToken ?? '');
+      setTelegramChatIds((cfg.telegramChatIds ?? []).join(', '));
     } catch {
       showToast('Failed to load config', false);
     } finally {
@@ -242,6 +250,11 @@ export default function AdminPage() {
         maxLiquidityUsd: Number(maxLiquidity),
       };
       if (gasKey) body['gasWalletPrivateKey'] = gasKey;
+      body['telegramBotToken'] = telegramToken;
+      body['telegramChatIds'] = telegramChatIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
       const res = await fetch(`${API}/admin/config`, {
         method: 'POST',
@@ -256,12 +269,34 @@ export default function AdminPage() {
       const updated: Config = await res.json();
       setConfig(updated);
       setGasKey('');
+      setTelegramToken(updated.telegramBotToken ?? '');
+      setTelegramChatIds((updated.telegramChatIds ?? []).join(', '));
       showToast('Settings saved', true);
       loadAll();
     } catch {
       showToast('Save failed', false);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTelegramTest() {
+    setSendingTest(true);
+    try {
+      const res = await fetch(`${API}/admin/telegram-test`, {
+        method: 'POST',
+        headers: headers(),
+      });
+      const data = await res.json() as { ok: boolean; message?: string; error?: string; errors?: string[] };
+      if (data.ok) {
+        showToast('Test message sent!', true);
+      } else {
+        showToast(data.error ?? data.errors?.[0] ?? 'Send failed', false);
+      }
+    } catch {
+      showToast('Could not reach server', false);
+    } finally {
+      setSendingTest(false);
     }
   }
 
@@ -443,6 +478,55 @@ export default function AdminPage() {
                   Leave blank to keep the current key unchanged.
                 </p>
               </div>
+            </div>
+          </Section>
+        </div>
+
+        {/* Telegram alerts */}
+        <div className="bg-surface border border-border rounded-2xl p-6 flex flex-col gap-6">
+          <Section title="Telegram Alerts">
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-2 text-xs text-muted-foreground bg-surface-raised border border-border rounded-lg px-3 py-2.5">
+                <Bell className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
+                <span>Sends an alert when bridge liquidity reaches <strong className="text-foreground">90%</strong> of the cap. At most once per hour.</span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+                  Bot Token
+                </label>
+                <div className="relative">
+                  <input
+                    type={showTgToken ? 'text' : 'password'}
+                    value={telegramToken}
+                    onChange={(e) => setTelegramToken(e.target.value)}
+                    placeholder="123456:ABC-DEF..."
+                    className="w-full bg-surface-raised border border-border rounded-lg px-3 py-2.5 pr-10 text-sm font-mono text-foreground outline-none focus:border-primary transition-colors placeholder:text-muted-foreground/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowTgToken(!showTgToken)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showTgToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">Get this from @BotFather on Telegram.</p>
+              </div>
+              <Field
+                label="Chat IDs (comma-separated)"
+                value={telegramChatIds}
+                onChange={setTelegramChatIds}
+                placeholder="-1001234567890, 987654321"
+                hint="User or group chat IDs to notify. Use @userinfobot to find your chat ID."
+              />
+              <button
+                onClick={handleTelegramTest}
+                disabled={sendingTest || !telegramToken || !telegramChatIds.trim()}
+                className="flex items-center justify-center gap-2 bg-surface-raised hover:bg-border disabled:opacity-40 border border-border text-foreground font-semibold rounded-xl py-2.5 text-sm transition-colors"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {sendingTest ? 'Sending…' : 'Send Test Message'}
+              </button>
             </div>
           </Section>
         </div>

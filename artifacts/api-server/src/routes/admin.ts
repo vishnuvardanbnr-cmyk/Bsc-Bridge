@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { z } from 'zod/v4';
 import { loadConfig, saveConfig } from '../lib/config.js';
 import { getBridgeUsdtBalance } from '../lib/bscClient.js';
+import { sendTestMessage } from '../lib/telegram.js';
 
 const router: IRouter = Router();
 
@@ -34,6 +35,8 @@ const ConfigUpdateSchema = z.object({
     .optional(),
   maxLiquidityUsd: z.number().positive().optional(),
   gasWalletPrivateKey: z.union([HexKey, z.literal('')]).optional(),
+  telegramBotToken: z.string().optional(),
+  telegramChatIds: z.array(z.string()).optional(),
 });
 
 // ── GET /admin/config ──────────────────────────────────────────────────────────
@@ -48,6 +51,8 @@ router.get('/admin/config', requireAdmin, (_req, res) => {
       : process.env['BRIDGE_ADMIN_PRIVATE_KEY']
       ? 'env'
       : 'none',
+    telegramBotToken: cfg.telegramBotToken,
+    telegramChatIds: cfg.telegramChatIds,
   });
 });
 
@@ -70,7 +75,28 @@ router.post('/admin/config', requireAdmin, (req, res) => {
       : process.env['BRIDGE_ADMIN_PRIVATE_KEY']
       ? 'env'
       : 'none',
+    telegramBotToken: updated.telegramBotToken,
+    telegramChatIds: updated.telegramChatIds,
   });
+});
+
+// ── POST /admin/telegram-test ──────────────────────────────────────────────────
+router.post('/admin/telegram-test', requireAdmin, async (req, res) => {
+  const cfg = loadConfig();
+  const token = cfg.telegramBotToken;
+  const chatIds = cfg.telegramChatIds;
+
+  if (!token || chatIds.length === 0) {
+    res.status(400).json({ error: 'Telegram not configured — save bot token and chat IDs first' });
+    return;
+  }
+
+  const result = await sendTestMessage(token, chatIds);
+  if (result.ok) {
+    res.json({ ok: true, message: 'Test message sent successfully' });
+  } else {
+    res.status(500).json({ ok: false, errors: result.errors });
+  }
 });
 
 // ── GET /admin/liquidity ───────────────────────────────────────────────────────
