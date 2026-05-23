@@ -143,7 +143,7 @@ export const bscBridgeAbi = [
 ] as const;
 
 // ── MChain Bridge ABI ──────────────────────────────────────────────────────────
-// MChain: withdraw(amount, destinationAddress) — user burns wUSDT on MChain
+// MChain: withdraw(amount, destinationAddress) — user burns mUSDT on MChain
 export const mchainBridgeAbi = [
   {
     inputs: [

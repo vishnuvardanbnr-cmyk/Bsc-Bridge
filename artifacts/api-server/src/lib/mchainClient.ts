@@ -27,7 +27,7 @@ const ERC20_BALANCE_ABI = [
   },
 ] as const;
 
-export async function getMchainTokenBalance(
+export async function getMusdtBalance(
   address: `0x${string}`,
   tokenAddress: `0x${string}`,
 ): Promise<string> {
