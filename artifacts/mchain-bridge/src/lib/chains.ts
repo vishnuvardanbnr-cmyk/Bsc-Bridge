@@ -6,7 +6,7 @@ export const mchain = defineChain({
   id: 1888,
   name: 'MChain',
   nativeCurrency: { name: 'MChain', symbol: 'MC', decimals: 18 },
-  rpcUrls: { default: { http: ['https://rpc.mchain.network'] } },
+  rpcUrls: { default: { http: ['https://node.mymchain.com'] } },
   blockExplorers: { default: { name: 'MChain Explorer', url: 'https://explorer.mchain.network' } },
 });
 

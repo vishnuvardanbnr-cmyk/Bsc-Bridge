@@ -28,7 +28,7 @@ export function getExplorerAddressUrl(chainId: number, address: string) {
 
 export const RPC_URLS: Record<number, string> = {
   56: 'https://bsc-dataseed.binance.org',
-  1888: 'https://rpc.mchain.network',
+  1888: 'https://node.mymchain.com',
 };
 
 // ── USDT ERC-20 ABI ────────────────────────────────────────────────────────────
