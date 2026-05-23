@@ -152,9 +152,9 @@ export function BridgeWidget() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-surface/95 rounded-2xl z-20 flex flex-col items-center justify-center gap-4 p-8"
+            className="absolute inset-0 bg-[#111827] rounded-2xl z-20 flex flex-col items-center justify-center gap-4 p-8"
           >
-            <div className="w-14 h-14 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+            <div className="w-14 h-14 rounded-full bg-[#0c2a3f] border border-primary/60 flex items-center justify-center">
               <Fuel className="w-6 h-6 text-primary" />
             </div>
             <div className="text-center">
