@@ -1,6 +1,9 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import bcrypt from 'bcryptjs';
+
+const BCRYPT_ROUNDS = 10;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '../../data');
@@ -77,4 +80,30 @@ export function getGasWalletKey(): string | undefined {
   const cfg = loadConfig();
   if (cfg.gasWalletPrivateKey) return cfg.gasWalletPrivateKey;
   return process.env['BRIDGE_ADMIN_PRIVATE_KEY'];
+}
+
+/**
+ * Hash a plain-text password with bcrypt.
+ * Call this before storing any password.
+ */
+export async function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, BCRYPT_ROUNDS);
+}
+
+/**
+ * Compare a plain-text password against a stored value.
+ * Handles both bcrypt hashes ($2b$...) and legacy plain-text values
+ * (auto-migrates plain-text to bcrypt on first successful compare).
+ */
+export async function verifyPassword(plain: string, stored: string): Promise<boolean> {
+  if (stored.startsWith('$2b$') || stored.startsWith('$2a$')) {
+    return bcrypt.compare(plain, stored);
+  }
+  // Legacy plain-text: compare then migrate to hash
+  if (plain === stored) {
+    const hashed = await bcrypt.hash(plain, BCRYPT_ROUNDS);
+    saveConfig({ adminPassword: hashed });
+    return true;
+  }
+  return false;
 }

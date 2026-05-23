@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod/v4';
-import { loadConfig, saveConfig } from '../lib/config.js';
+import { loadConfig, saveConfig, hashPassword, verifyPassword } from '../lib/config.js';
 import { getBridgeUsdtBalance } from '../lib/bscClient.js';
 import { sendTestMessage } from '../lib/telegram.js';
 
@@ -10,11 +10,20 @@ const router: IRouter = Router();
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const cfg = loadConfig();
   const password = req.headers['x-admin-password'] as string | undefined;
-  if (!password || password !== cfg.adminPassword) {
+  if (!password) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
-  next();
+  // verifyPassword is async — run it then call next
+  verifyPassword(password, cfg.adminPassword).then((ok) => {
+    if (!ok) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    next();
+  }).catch(() => {
+    res.status(401).json({ error: 'Unauthorized' });
+  });
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────────
@@ -57,14 +66,19 @@ router.get('/admin/config', requireAdmin, (_req, res) => {
 });
 
 // ── POST /admin/config ─────────────────────────────────────────────────────────
-router.post('/admin/config', requireAdmin, (req, res) => {
+router.post('/admin/config', requireAdmin, async (req, res) => {
   const parsed = ConfigUpdateSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
   }
 
-  const updated = saveConfig(parsed.data as Parameters<typeof saveConfig>[0]);
+  const data = parsed.data as Parameters<typeof saveConfig>[0];
+  // Hash new password before storing
+  if (data.adminPassword) {
+    data.adminPassword = await hashPassword(data.adminPassword);
+  }
+  const updated = saveConfig(data);
   res.json({
     ok: true,
     contracts: updated.contracts,
@@ -122,10 +136,15 @@ router.get('/admin/liquidity', requireAdmin, async (req, res) => {
 
 // ── POST /admin/verify ─────────────────────────────────────────────────────────
 // Just validates the password — used for the login gate
-router.post('/admin/verify', (req, res) => {
+router.post('/admin/verify', async (req, res) => {
   const cfg = loadConfig();
   const { password } = req.body as { password?: string };
-  if (password === cfg.adminPassword) {
+  if (!password) {
+    res.status(401).json({ ok: false, error: 'Wrong password' });
+    return;
+  }
+  const ok = await verifyPassword(password, cfg.adminPassword);
+  if (ok) {
     res.json({ ok: true });
   } else {
     res.status(401).json({ ok: false, error: 'Wrong password' });
