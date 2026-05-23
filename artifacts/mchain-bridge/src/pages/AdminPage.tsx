@@ -311,7 +311,7 @@ export default function AdminPage() {
         {/* Liquidity status */}
         <div className={cn(
           'rounded-2xl border p-5 flex flex-col gap-4',
-          liquidity?.capReached ? 'border-danger/40 bg-danger/5' : 'border-border bg-surface',
+          liquidity?.capReached ? 'border-red-800 bg-[#1E0A0A]' : 'border-border bg-surface',
         )}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold tracking-widest uppercase text-muted-foreground">
@@ -406,10 +406,10 @@ export default function AdminPage() {
             <div className="flex flex-col gap-3">
               {config && (
                 <div className={cn(
-                  'flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg',
+                  'flex items-center gap-2 text-xs font-semibold px-3 py-2.5 rounded-lg border',
                   config.gasWalletKeySource === 'none'
-                    ? 'bg-danger/10 text-danger'
-                    : 'bg-success/10 text-success',
+                    ? 'bg-[#2A0E0E] border-red-900 text-red-400'
+                    : 'bg-[#0D2218] border-emerald-800 text-emerald-400',
                 )}>
                   {config.gasWalletKeySource === 'none' ? (
                     <><AlertTriangle className="w-3.5 h-3.5" /> No key configured — gas subsidy disabled</>
@@ -518,14 +518,14 @@ export default function AdminPage() {
       {/* Toast */}
       {toast && (
         <div className={cn(
-          'fixed bottom-6 right-6 flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold shadow-lg border transition-all',
+          'fixed bottom-6 right-6 flex items-center gap-2 px-4 py-3.5 rounded-xl text-sm font-semibold shadow-2xl border-l-4 transition-all text-white',
           toast.ok
-            ? 'bg-success/10 border-success/30 text-success'
-            : 'bg-danger/10 border-danger/30 text-danger',
+            ? 'bg-[#0D2218] border-l-emerald-500 border border-emerald-800'
+            : 'bg-[#2A0E0E] border-l-red-500 border border-red-900',
         )}>
           {toast.ok
-            ? <CheckCircle2 className="w-4 h-4" />
-            : <AlertTriangle className="w-4 h-4" />
+            ? <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            : <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
           }
           {toast.msg}
         </div>

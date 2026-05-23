@@ -1,0 +1,15 @@
+{
+  "adminPassword": "admin123",
+  "contracts": {
+    "bsc": {
+      "bridge": "0xE4363F8FbD39FB0930772644Ebd14597e5756986",
+      "token": "0x55d398326f99059fF775485246999027B3197955"
+    },
+    "mchain": {
+      "bridge": "0x0000000000000000000000000000000000000004",
+      "token": "0x0000000000000000000000000000000000000002"
+    }
+  },
+  "maxLiquidityUsd": 10000,
+  "gasWalletPrivateKey": ""
+}

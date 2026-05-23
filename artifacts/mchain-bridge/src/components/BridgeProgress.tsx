@@ -122,7 +122,7 @@ export function BridgeProgress({
             target="_blank"
             rel="noopener noreferrer"
             data-testid="view-tx-btn"
-            className="flex-1 rounded-xl py-3 font-bold bg-primary/10 text-primary hover:bg-primary/20 transition-all text-center"
+            className="flex-1 rounded-xl py-3 font-bold bg-primary text-white hover:bg-primary/90 transition-all text-center"
           >
             View Tx
           </a>

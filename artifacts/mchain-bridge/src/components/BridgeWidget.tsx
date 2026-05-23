@@ -201,7 +201,7 @@ export function BridgeWidget() {
             key="gas-error"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
-            className="absolute top-4 left-4 right-4 z-20 bg-danger/10 border border-danger/30 rounded-xl p-3 flex items-center justify-between gap-2"
+            className="absolute top-4 left-4 right-4 z-20 bg-[#2A0E0E] border border-red-900 rounded-xl p-3 flex items-center justify-between gap-2"
           >
             <div className="flex items-center gap-2 text-danger text-xs font-semibold">
               <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
@@ -416,7 +416,7 @@ export function BridgeWidget() {
                   'w-full rounded-xl py-4 font-bold transition-all shadow-lg',
                   btnState.disabled
                     ? hasInsufficientBalance
-                      ? 'bg-danger/10 text-danger border border-danger/30 shadow-none cursor-not-allowed'
+                      ? 'bg-[#2A0E0E] text-red-400 border border-red-900 shadow-none cursor-not-allowed'
                       : 'bg-surface-raised text-muted-foreground shadow-none cursor-not-allowed opacity-50'
                     : 'bg-gradient-to-br from-primary to-primary-hover text-white shadow-primary/20 hover:shadow-primary/40 hover:opacity-90'
                 )}

@@ -115,17 +115,17 @@ export function TxHistory() {
 
                     <div className="flex-shrink-0">
                       {tx.status === 'Completed' && (
-                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-success/10 text-success">
+                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-[#0D2218] border border-emerald-800 text-emerald-400">
                           Complete
                         </span>
                       )}
                       {tx.status === 'Pending' && (
-                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-warning/10 text-warning">
+                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-[#2A1E08] border border-amber-800 text-amber-400">
                           Pending
                         </span>
                       )}
                       {tx.status === 'Failed' && (
-                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-danger/10 text-danger">
+                        <span className="px-2 py-1 text-xs font-semibold rounded-md bg-[#2A0E0E] border border-red-900 text-red-400">
                           Failed
                         </span>
                       )}
