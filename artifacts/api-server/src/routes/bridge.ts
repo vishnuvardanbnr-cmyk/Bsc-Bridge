@@ -347,4 +347,78 @@ router.post('/bridge/notify', async (req, res) => {
   })().catch(() => {});
 });
 
+// ── POST /bridge/recover ───────────────────────────────────────────────────────
+// Manually relay a MChain withdrawal that was missed (e.g. API was down when
+// the user submitted their tx).  Accepts the MChain tx hash and immediately
+// processes the receipt to call unlock() on BSC.
+const RecoverBody = z.object({
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid tx hash'),
+});
+
+router.post('/bridge/recover', async (req, res) => {
+  const parsed = RecoverBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    return;
+  }
+
+  const { txHash } = parsed.data;
+  const cfg = loadConfig();
+  const key = (await import('../lib/config.js')).getGasWalletKey();
+  if (!key) {
+    res.status(503).json({ error: 'Relayer not configured' });
+    return;
+  }
+
+  try {
+    const { mchainPublicClient } = await import('../lib/mchainClient.js');
+
+    // Get receipt — must already be mined
+    let receipt;
+    try {
+      receipt = await mchainPublicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+    } catch {
+      res.status(404).json({ error: 'Transaction not found or not yet mined on MChain' });
+      return;
+    }
+
+    if (!receipt) {
+      res.status(404).json({ error: 'Transaction not found on MChain' });
+      return;
+    }
+    if (receipt.status !== 'success') {
+      res.status(400).json({ error: 'Transaction failed on MChain — nothing to relay' });
+      return;
+    }
+
+    const state = loadState();
+    const mchainBridge = cfg.contracts.mchain.bridge as `0x${string}`;
+
+    // Check if already processed
+    const hasWithdrawLog = receipt.logs.some(
+      l => l.address.toLowerCase() === mchainBridge.toLowerCase()
+    );
+    if (!hasWithdrawLog) {
+      res.status(400).json({ error: 'No bridge event found in this transaction' });
+      return;
+    }
+
+    req.log.info({ txHash }, 'Manual recovery: processing MChain withdrawal receipt');
+    await processWithdrawalReceipt(
+      txHash as `0x${string}`,
+      mchainBridge,
+      cfg.contracts.bsc.bridge as `0x${string}`,
+      state,
+      key,
+    );
+    saveState(state);
+
+    res.json({ ok: true, message: 'Recovery processed — check your BSC wallet in ~30 seconds' });
+  } catch (err) {
+    const e = err as Error;
+    req.log.error({ err, txHash }, 'bridge/recover failed');
+    res.status(500).json({ error: 'Recovery failed', message: e.message });
+  }
+});
+
 export default router;

@@ -25,8 +25,12 @@ const STATE_PATH = join(DATA_DIR, 'relayer-state.json');
 
 const BRIDGE_FEE_BPS = 100; // 1% fee — must match frontend
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
-const BLOCKS_TO_SCAN = 1000n; // scan last N blocks on first start
+const BLOCKS_TO_SCAN = 1000n; // scan last N blocks on first start (BSC only)
 const MAX_BLOCK_RANGE = 1999n; // bsc-dataseed.binance.org hard cap ~2000 blocks
+// MChain block scan constants — MChain produces ~1 block/sec so 50 blocks ≈ 50s.
+// Do NOT increase: MChain RPC takes ~30ms per getBlock call, 50 blocks = ~1.5s per cycle.
+// The background scanner is a safety net; primary relay path is the /bridge/notify endpoint.
+const MCHAIN_MAX_BLOCKS_PER_SCAN = 50n;
 
 // ── ABIs ────────────────────────────────────────────────────────────────────
 const BSC_BRIDGE_ABI = [
@@ -202,19 +206,26 @@ async function relayMchainWithdrawals(
     return;
   }
 
-  const fromBlock = state.lastMchainBlock !== '0'
+  // Cap scan window: never scan more than MCHAIN_MAX_BLOCKS_PER_SCAN blocks per cycle.
+  // On first start (lastMchainBlock = '0'), begin from just 50 blocks back, not thousands.
+  const rawFrom = state.lastMchainBlock !== '0'
     ? BigInt(state.lastMchainBlock)
-    : latestBlock - BLOCKS_TO_SCAN;
+    : latestBlock - MCHAIN_MAX_BLOCKS_PER_SCAN;
+  const fromBlock = rawFrom > latestBlock ? latestBlock : rawFrom;
+  const toBlock = fromBlock + MCHAIN_MAX_BLOCKS_PER_SCAN < latestBlock
+    ? fromBlock + MCHAIN_MAX_BLOCKS_PER_SCAN
+    : latestBlock;
 
-  logger.info({ fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'Scanning MChain for withdrawals');
+  logger.info({ fromBlock: fromBlock.toString(), toBlock: toBlock.toString() }, 'Scanning MChain for withdrawals');
 
+  let bridgeTxCount = 0;
   // Scan each block for txs to the bridge contract, then read receipts
-  for (let b = fromBlock; b <= latestBlock; b++) {
+  for (let b = fromBlock; b <= toBlock; b++) {
     try {
       const block = await mchainPublicClient.getBlock({ blockNumber: b, includeTransactions: true });
       const bridgeTxs = (block.transactions as { to?: string; hash: `0x${string}` }[])
         .filter(tx => tx.to?.toLowerCase() === mchainBridge.toLowerCase());
-
+      bridgeTxCount += bridgeTxs.length;
       for (const tx of bridgeTxs) {
         await processWithdrawalReceipt(tx.hash, mchainBridge, bscBridge, state, key);
       }
@@ -223,7 +234,8 @@ async function relayMchainWithdrawals(
     }
   }
 
-  state.lastMchainBlock = latestBlock.toString();
+  logger.info({ count: bridgeTxCount }, 'MChain bridge txs found');
+  state.lastMchainBlock = toBlock.toString();
 }
 
 // ── Process a single MChain withdrawal by tx hash ────────────────────────────

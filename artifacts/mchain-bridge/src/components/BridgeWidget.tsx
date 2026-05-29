@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAccount, useBalance, useSwitchChain } from 'wagmi';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2 } from 'lucide-react';
+import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2, RotateCcw } from 'lucide-react';
 import { bsc } from 'wagmi/chains';
 import { mchain } from '../lib/chains';
 import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
@@ -15,6 +15,99 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 const BRIDGE_FEE = 0.01;
 const MC_USD_PRICE = 1;
 const MIN_AMOUNT = 1;
+
+// ── Recovery panel for stuck MChain withdrawals ──────────────────────────────
+function RecoveryPanel() {
+  const [open, setOpen] = useState(false);
+  const [txHash, setTxHash] = useState('');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
+  const [message, setMessage] = useState('');
+
+  const handleRecover = useCallback(async () => {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      setStatus('error');
+      setMessage('Please enter a valid 0x transaction hash (66 characters)');
+      return;
+    }
+    setStatus('loading');
+    setMessage('');
+    try {
+      const res = await fetch('/api/bridge/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash }),
+      });
+      const data = await res.json() as { ok?: boolean; message?: string; error?: string };
+      if (res.ok && data.ok) {
+        setStatus('ok');
+        setMessage(data.message ?? 'Recovery submitted — check your BSC wallet shortly');
+      } else {
+        setStatus('error');
+        setMessage(data.error ?? 'Recovery failed');
+      }
+    } catch {
+      setStatus('error');
+      setMessage('Network error — please try again');
+    }
+  }, [txHash]);
+
+  return (
+    <div className="mt-4 border-t border-border/40 pt-4">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <RotateCcw className="w-3 h-3" />
+        Withdrawal stuck? Recover it here
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="pt-3 flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                If you submitted a MChain → BSC withdrawal but didn't receive USDT, paste the MChain transaction hash below to manually trigger the relay.
+              </p>
+              <input
+                type="text"
+                placeholder="0x... (MChain withdrawal tx hash)"
+                value={txHash}
+                onChange={e => { setTxHash(e.target.value.trim()); setStatus('idle'); }}
+                className="bg-surface-raised border border-border rounded-lg px-3 py-2 text-xs font-mono text-foreground outline-none focus:border-primary w-full placeholder:text-muted-foreground/50"
+              />
+              {status === 'ok' && (
+                <p className="text-xs text-success flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {message}
+                </p>
+              )}
+              {status === 'error' && (
+                <p className="text-xs text-danger flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" /> {message}
+                </p>
+              )}
+              <button
+                onClick={handleRecover}
+                disabled={status === 'loading' || !txHash}
+                className={cn(
+                  'rounded-lg py-2 text-xs font-bold transition-all',
+                  status === 'loading' || !txHash
+                    ? 'bg-surface-raised text-muted-foreground cursor-not-allowed opacity-50'
+                    : 'bg-primary text-white hover:opacity-90'
+                )}
+              >
+                {status === 'loading' ? 'Processing…' : 'Recover Withdrawal'}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 function ChainBadge({ chainId }: { chainId: number }) {
   const isBsc = chainId === bsc.id;
@@ -431,6 +524,8 @@ export function BridgeWidget() {
             <p className="text-xs text-muted-foreground text-center mt-4 px-4 leading-relaxed">
               By bridging you agree to the terms of the smart contract. Transactions are irreversible.
             </p>
+
+            <RecoveryPanel />
 
           </motion.div>
         )}
