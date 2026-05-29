@@ -2,7 +2,7 @@ import { type Address } from 'viem';
 
 export const CONTRACTS = {
   bsc: {
-    bridge: '0xE4363F8FbD39FB0930772644Ebd14597e5756986' as Address,
+    bridge: '0xf8e81D47203A594245E36C48e151709F0C19fBe8' as Address,
     token: '0x55d398326f99059fF775485246999027B3197955' as Address,
   },
   mchain: {
