@@ -259,6 +259,17 @@ async function relayMchainWithdrawals(
   state.lastMchainBlock = latestBlock.toString();
 }
 
+// ── On-demand trigger ────────────────────────────────────────────────────────
+// Called immediately after a deposit/withdraw tx is submitted so the relay
+// fires as soon as the tx is mined rather than waiting for the next poll.
+let _tickFn: (() => Promise<void>) | null = null;
+
+export function triggerRelayTick(): void {
+  if (_tickFn) {
+    _tickFn().catch((err) => logger.error({ err }, 'On-demand relay tick error'));
+  }
+}
+
 // ── Main loop ────────────────────────────────────────────────────────────────
 export function startRelayer(): void {
   logger.info('Relayer starting');
@@ -295,6 +306,9 @@ export function startRelayer(): void {
       saveState(state);
     }
   }
+
+  // Expose tick for on-demand triggering
+  _tickFn = tick;
 
   // Run immediately on start, then on interval
   tick().catch((err) => logger.error({ err }, 'Relayer tick error'));

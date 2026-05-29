@@ -13,6 +13,7 @@ import {
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
 import { maybeSendLiquidityAlert } from '../lib/telegram.js';
+import { triggerRelayTick } from '../lib/relayer.js';
 
 const router: IRouter = Router();
 
@@ -260,6 +261,51 @@ router.get('/bridge/status/:txHash', async (req, res) => {
     req.log.error({ err }, 'bridge/status failed');
     res.status(500).json({ error: 'Failed to get tx status' });
   }
+});
+
+// ── POST /bridge/notify ────────────────────────────────────────────────────────
+// Frontend calls this right after submitting a deposit/withdraw tx.
+// Server waits for the tx to be mined then immediately fires a relay tick
+// instead of waiting up to 30 s for the next scheduled poll.
+const NotifyBody = z.object({
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid tx hash'),
+});
+
+router.post('/bridge/notify', async (req, res) => {
+  const parsed = NotifyBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  const { txHash } = parsed.data;
+  res.json({ ok: true }); // respond immediately; watch happens in background
+
+  // Background: wait for tx confirmation then trigger relay
+  (async () => {
+    const MAX_WAIT_MS = 120_000;
+    const POLL_MS = 3_000;
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (Date.now() < deadline) {
+      try {
+        const result = await getTxStatus(txHash as `0x${string}`);
+        if (result.status === 'confirmed') {
+          req.log.info({ txHash }, 'Deposit confirmed — triggering immediate relay');
+          triggerRelayTick();
+          return;
+        }
+        if (result.status === 'failed') {
+          req.log.warn({ txHash }, 'Deposit tx failed — skipping relay');
+          return;
+        }
+      } catch {
+        // ignore, keep polling
+      }
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+    req.log.warn({ txHash }, 'Deposit notify timed out waiting for confirmation');
+  })().catch(() => {});
 });
 
 export default router;

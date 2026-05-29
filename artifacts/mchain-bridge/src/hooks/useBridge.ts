@@ -87,8 +87,15 @@ export function useBridge(fromChainId: number, toChainId: number, amount: string
       setTxHash(sendHash);
       setStep('relaying');
 
-      // Poll for relay completion — in production the relayer picks this up
-      // Mock advance after 15s for demo
+      // Notify the server immediately so it triggers the relay as soon as
+      // the tx is confirmed, rather than waiting for the 30s scheduled poll.
+      fetch('/api/bridge/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: sendHash }),
+      }).catch(() => {}); // fire-and-forget
+
+      // Poll for relay completion (relay fires server-side within ~5-10s of confirmation)
       setTimeout(() => {
         setStep('done');
       }, 15_000);
