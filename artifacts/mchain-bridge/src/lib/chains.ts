@@ -16,7 +16,7 @@ export const wagmiConfig = getDefaultConfig({
   chains: [bsc, mchain],
   transports: {
     [bsc.id]: http('https://bsc.publicnode.com'),
-    [mchain.id]: http('https://node.mymchain.com/api/rpc'),
+    [mchain.id]: http('/api/rpc/mchain'),
   },
 });
 
