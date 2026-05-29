@@ -262,8 +262,9 @@ export default function AdminPage() {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const e = await res.json().catch(() => ({})) as { error?: string };
-        showToast(e.error ?? 'Save failed', false);
+        const e = await res.json().catch(() => ({})) as { error?: string; details?: { message: string }[] };
+        const detail = e.details?.[0]?.message;
+        showToast(detail ? `${e.error}: ${detail}` : (e.error ?? 'Save failed'), false);
         return;
       }
       const updated: Config = await res.json();
