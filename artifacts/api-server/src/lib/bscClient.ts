@@ -3,7 +3,7 @@ import { bsc } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getGasWalletKey } from './config.js';
 
-const BSC_RPC = 'https://bsc-dataseed.binance.org';
+const BSC_RPC = 'https://bsc.publicnode.com';
 
 export const GAS_THRESHOLD_BNB = 0.003;
 export const BNB_TO_SEND = '0.003';

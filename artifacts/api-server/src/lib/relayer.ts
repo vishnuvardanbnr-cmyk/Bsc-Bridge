@@ -25,7 +25,8 @@ const STATE_PATH = join(DATA_DIR, 'relayer-state.json');
 
 const BRIDGE_FEE_BPS = 100; // 1% fee — must match frontend
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
-const BLOCKS_TO_SCAN = 1000n; // scan last N blocks each poll
+const BLOCKS_TO_SCAN = 1000n; // scan last N blocks on first start
+const MAX_BLOCK_RANGE = 1999n; // bsc-dataseed.binance.org hard cap ~2000 blocks
 
 // ── ABIs ────────────────────────────────────────────────────────────────────
 const BSC_BRIDGE_ABI = [
@@ -125,23 +126,27 @@ async function relayBscDeposits(
     return;
   }
 
-  const fromBlock = state.lastBscBlock !== '0'
+  const rawFrom = state.lastBscBlock !== '0'
     ? BigInt(state.lastBscBlock)
     : latestBlock - BLOCKS_TO_SCAN;
+  // Clamp range to MAX_BLOCK_RANGE to satisfy bsc-dataseed rate limits
+  const fromBlock = rawFrom > latestBlock ? latestBlock : rawFrom;
+  const cappedTo = latestBlock;
+  const cappedFrom = cappedTo > MAX_BLOCK_RANGE ? cappedTo - MAX_BLOCK_RANGE : 0n;
+  const effectiveFrom = fromBlock > cappedFrom ? fromBlock : cappedFrom;
 
-  logger.info({ fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'Scanning BSC for deposits');
+  logger.info({ fromBlock: effectiveFrom.toString(), toBlock: cappedTo.toString() }, 'Scanning BSC for deposits');
 
   let logs;
   try {
     logs = await bscPublicClient.getLogs({
       address: bscBridge,
       event: BSC_BRIDGE_ABI[0],
-      fromBlock,
-      toBlock: latestBlock,
+      fromBlock: effectiveFrom,
+      toBlock: cappedTo,
     });
   } catch (err) {
-    logger.error({ err, fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'BSC getLogs failed');
-    // Advance block pointer so next poll doesn't retry same huge range
+    logger.error({ err, fromBlock: effectiveFrom.toString(), toBlock: cappedTo.toString() }, 'BSC getLogs failed');
     state.lastBscBlock = latestBlock.toString();
     return;
   }
@@ -233,7 +238,7 @@ async function relayMchainWithdrawals(
 
     try {
       const account = privateKeyToAccount(key as `0x${string}`);
-      const walletClient = createWalletClient({ account, chain: bsc, transport: http('https://bsc-dataseed.binance.org') });
+      const walletClient = createWalletClient({ account, chain: bsc, transport: http('https://bsc.publicnode.com') });
       const hash = await walletClient.writeContract({
         address: bscBridge,
         abi: BSC_BRIDGE_ABI,

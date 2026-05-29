@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, http, formatUnits } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts';
 import { getGasWalletKey } from './config.js';
 
-const MCHAIN_RPC = 'https://node.mymchain.com';
+const MCHAIN_RPC = 'https://node.mymchain.com/api/rpc';
 export const MCHAIN_CHAIN_ID = 1888;
 
 const mchain = {
