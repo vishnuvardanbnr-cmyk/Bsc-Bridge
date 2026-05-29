@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { createWalletClient, http, parseUnits } from 'viem';
+import { createWalletClient, http, decodeEventLog } from 'viem';
 import { bsc } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { publicClient as bscPublicClient } from './bscClient.js';
@@ -85,7 +85,7 @@ type RelayerState = {
   lastMchainBlock: string;
 };
 
-function loadState(): RelayerState {
+export function loadState(): RelayerState {
   try {
     if (existsSync(STATE_PATH)) {
       return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
@@ -99,7 +99,7 @@ function loadState(): RelayerState {
   };
 }
 
-function saveState(state: RelayerState): void {
+export function saveState(state: RelayerState): void {
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
 }
@@ -183,7 +183,9 @@ async function relayBscDeposits(
   state.lastBscBlock = latestBlock.toString();
 }
 
-// ── MChain → BSC relay ──────────────────────────────────────────────────────
+// ── MChain → BSC relay (receipt-based scan) ──────────────────────────────────
+// MChain's eth_getLogs doesn't index logs reliably, so we scan blocks by
+// fetching each block's transactions and checking receipts for bridge txs.
 async function relayMchainWithdrawals(
   state: RelayerState,
   mchainBridge: `0x${string}`,
@@ -206,35 +208,71 @@ async function relayMchainWithdrawals(
 
   logger.info({ fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'Scanning MChain for withdrawals');
 
-  let logs;
+  // Scan each block for txs to the bridge contract, then read receipts
+  for (let b = fromBlock; b <= latestBlock; b++) {
+    try {
+      const block = await mchainPublicClient.getBlock({ blockNumber: b, includeTransactions: true });
+      const bridgeTxs = (block.transactions as { to?: string; hash: `0x${string}` }[])
+        .filter(tx => tx.to?.toLowerCase() === mchainBridge.toLowerCase());
+
+      for (const tx of bridgeTxs) {
+        await processWithdrawalReceipt(tx.hash, mchainBridge, bscBridge, state, key);
+      }
+    } catch (err) {
+      logger.error({ err, block: b.toString() }, 'MChain block scan failed');
+    }
+  }
+
+  state.lastMchainBlock = latestBlock.toString();
+}
+
+// ── Process a single MChain withdrawal by tx hash ────────────────────────────
+// Used by both the background scanner and the on-demand notify endpoint.
+export async function processWithdrawalReceipt(
+  txHash: `0x${string}`,
+  mchainBridge: `0x${string}`,
+  bscBridge: `0x${string}`,
+  state: RelayerState,
+  key: string,
+): Promise<void> {
+  let receipt;
   try {
-    logs = await mchainPublicClient.getLogs({
-      address: mchainBridge,
-      event: MCHAIN_BRIDGE_ABI[0],
-      fromBlock,
-      toBlock: latestBlock,
-    });
+    receipt = await mchainPublicClient.getTransactionReceipt({ hash: txHash });
   } catch (err) {
-    logger.error({ err, fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'MChain getLogs failed');
-    state.lastMchainBlock = latestBlock.toString();
+    logger.error({ err, txHash }, 'MChain getTransactionReceipt failed');
     return;
   }
 
-  logger.info({ count: logs.length }, 'MChain withdrawal events found');
+  if (!receipt || receipt.status !== 'success') return;
 
-  for (const log of logs) {
-    const txId = log.args.txId as `0x${string}`;
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== mchainBridge.toLowerCase()) continue;
+
+    let decoded: { txId: `0x${string}`; user: `0x${string}`; amount: bigint; destinationAddress: string } | null = null;
+    try {
+      const result = decodeEventLog({
+        abi: MCHAIN_BRIDGE_ABI,
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+        eventName: 'Withdrawn',
+      });
+      decoded = result.args as typeof decoded;
+    } catch {
+      continue; // not a Withdrawn event — skip
+    }
+
+    if (!decoded) continue;
+    const { txId, amount, destinationAddress } = decoded;
+
     if (!txId || state.processedMchainWithdraws.includes(txId)) continue;
 
-    const destinationAddress = log.args.destinationAddress as string;
-    const amount = log.args.amount as bigint;
-    const netAmount = applyFee(amount);
-
-    if (!/^0x[0-9a-fA-F]{40}$/.test(destinationAddress)) {
+    if (!/^0x[0-9a-fA-F]{40}$/i.test(destinationAddress)) {
       logger.warn({ txId, destinationAddress }, 'Invalid BSC destination address — skipping');
       state.processedMchainWithdraws.push(txId);
       continue;
     }
+
+    const netAmount = applyFee(amount);
 
     try {
       const account = privateKeyToAccount(key as `0x${string}`);
@@ -255,8 +293,6 @@ async function relayMchainWithdrawals(
       logger.error({ err, txId }, 'Failed to unlock on BSC');
     }
   }
-
-  state.lastMchainBlock = latestBlock.toString();
 }
 
 // ── On-demand trigger ────────────────────────────────────────────────────────

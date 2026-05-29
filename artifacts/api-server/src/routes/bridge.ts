@@ -13,7 +13,7 @@ import {
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
 import { maybeSendLiquidityAlert } from '../lib/telegram.js';
-import { triggerRelayTick } from '../lib/relayer.js';
+import { triggerRelayTick, processWithdrawalReceipt, loadState, saveState } from '../lib/relayer.js';
 
 const router: IRouter = Router();
 
@@ -264,11 +264,12 @@ router.get('/bridge/status/:txHash', async (req, res) => {
 });
 
 // ── POST /bridge/notify ────────────────────────────────────────────────────────
-// Frontend calls this right after submitting a deposit/withdraw tx.
-// Server waits for the tx to be mined then immediately fires a relay tick
-// instead of waiting up to 30 s for the next scheduled poll.
+// Frontend calls this right after submitting a deposit or withdrawal tx.
+//   chain: 'bsc'    → BSC deposit: wait for confirmation, trigger relay tick
+//   chain: 'mchain' → MChain withdrawal: wait for confirmation, process receipt directly
 const NotifyBody = z.object({
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid tx hash'),
+  chain: z.enum(['bsc', 'mchain']).optional().default('bsc'),
 });
 
 router.post('/bridge/notify', async (req, res) => {
@@ -278,33 +279,71 @@ router.post('/bridge/notify', async (req, res) => {
     return;
   }
 
-  const { txHash } = parsed.data;
+  const { txHash, chain } = parsed.data;
   res.json({ ok: true }); // respond immediately; watch happens in background
 
-  // Background: wait for tx confirmation then trigger relay
   (async () => {
-    const MAX_WAIT_MS = 120_000;
+    const MAX_WAIT_MS = 180_000;
     const POLL_MS = 3_000;
     const deadline = Date.now() + MAX_WAIT_MS;
+    const cfg = loadConfig();
 
-    while (Date.now() < deadline) {
-      try {
-        const result = await getTxStatus(txHash as `0x${string}`);
-        if (result.status === 'confirmed') {
-          req.log.info({ txHash }, 'Deposit confirmed — triggering immediate relay');
-          triggerRelayTick();
-          return;
-        }
-        if (result.status === 'failed') {
-          req.log.warn({ txHash }, 'Deposit tx failed — skipping relay');
-          return;
-        }
-      } catch {
-        // ignore, keep polling
+    if (chain === 'mchain') {
+      // ── MChain withdrawal: poll MChain for receipt, then call unlock() on BSC ──
+      const { mchainPublicClient } = await import('../lib/mchainClient.js');
+      const key = (await import('../lib/config.js')).getGasWalletKey();
+      if (!key) {
+        req.log.warn({ txHash }, 'No relayer key — cannot process MChain withdrawal');
+        return;
       }
-      await new Promise((r) => setTimeout(r, POLL_MS));
+
+      while (Date.now() < deadline) {
+        try {
+          const receipt = await mchainPublicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+          if (receipt) {
+            if (receipt.status !== 'success') {
+              req.log.warn({ txHash }, 'MChain withdrawal tx failed on-chain — skipping');
+              return;
+            }
+            req.log.info({ txHash }, 'MChain withdrawal confirmed — processing unlock');
+            const state = loadState();
+            await processWithdrawalReceipt(
+              txHash as `0x${string}`,
+              cfg.contracts.mchain.bridge as `0x${string}`,
+              cfg.contracts.bsc.bridge as `0x${string}`,
+              state,
+              key,
+            );
+            saveState(state);
+            return;
+          }
+        } catch {
+          // not yet mined, keep polling
+        }
+        await new Promise((r) => setTimeout(r, POLL_MS));
+      }
+      req.log.warn({ txHash }, 'MChain withdrawal notify timed out');
+    } else {
+      // ── BSC deposit: wait for confirmation then trigger relay tick ──
+      while (Date.now() < deadline) {
+        try {
+          const result = await getTxStatus(txHash as `0x${string}`);
+          if (result.status === 'confirmed') {
+            req.log.info({ txHash }, 'Deposit confirmed — triggering immediate relay');
+            triggerRelayTick();
+            return;
+          }
+          if (result.status === 'failed') {
+            req.log.warn({ txHash }, 'Deposit tx failed — skipping relay');
+            return;
+          }
+        } catch {
+          // ignore, keep polling
+        }
+        await new Promise((r) => setTimeout(r, POLL_MS));
+      }
+      req.log.warn({ txHash }, 'Deposit notify timed out waiting for confirmation');
     }
-    req.log.warn({ txHash }, 'Deposit notify timed out waiting for confirmation');
   })().catch(() => {});
 });
 

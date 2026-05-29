@@ -92,7 +92,7 @@ export function useBridge(fromChainId: number, toChainId: number, amount: string
       fetch('/api/bridge/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash: sendHash }),
+        body: JSON.stringify({ txHash: sendHash, chain: isBsc ? 'bsc' : 'mchain' }),
       }).catch(() => {}); // fire-and-forget
 
       // Poll for relay completion (relay fires server-side within ~5-10s of confirmation)
