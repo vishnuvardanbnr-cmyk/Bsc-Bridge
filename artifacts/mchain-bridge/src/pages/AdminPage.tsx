@@ -249,7 +249,11 @@ export default function AdminPage() {
         },
         maxLiquidityUsd: Number(maxLiquidity),
       };
-      if (gasKey) body['gasWalletPrivateKey'] = gasKey;
+      if (gasKey) {
+        // Normalize: strip whitespace, add 0x prefix if missing
+        let normalizedKey = gasKey.trim().replace(/^0x/i, '');
+        body['gasWalletPrivateKey'] = '0x' + normalizedKey;
+      }
       body['telegramBotToken'] = telegramToken;
       body['telegramChatIds'] = telegramChatIds
         .split(',')

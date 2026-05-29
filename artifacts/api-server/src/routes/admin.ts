@@ -28,7 +28,10 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 
 // ── Validation ─────────────────────────────────────────────────────────────────
 const EvmAddress = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'Invalid EVM address');
-const HexKey = z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid private key');
+const HexKey = z.string().regex(
+  /^0x[0-9a-fA-F]{64}$/,
+  'Invalid private key — must be 0x followed by 64 hex characters (66 chars total)',
+);
 
 const ConfigUpdateSchema = z.object({
   adminPassword: z.string().min(6).optional(),
@@ -43,7 +46,10 @@ const ConfigUpdateSchema = z.object({
     })
     .optional(),
   maxLiquidityUsd: z.number().positive().optional(),
-  gasWalletPrivateKey: z.union([HexKey, z.literal('')]).optional(),
+  gasWalletPrivateKey: z.string().optional().refine(
+    (v) => v === undefined || v === '' || /^0x[0-9a-fA-F]{64}$/.test(v),
+    'Invalid private key — must be 0x followed by 64 hex characters',
+  ),
   telegramBotToken: z.string().optional(),
   telegramChatIds: z.array(z.string()).optional(),
 });
