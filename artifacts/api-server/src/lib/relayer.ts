@@ -117,17 +117,36 @@ async function relayBscDeposits(
   const key = getGasWalletKey();
   if (!key) return;
 
-  const latestBlock = await bscPublicClient.getBlockNumber();
+  let latestBlock: bigint;
+  try {
+    latestBlock = await bscPublicClient.getBlockNumber();
+  } catch (err) {
+    logger.error({ err }, 'BSC getBlockNumber failed');
+    return;
+  }
+
   const fromBlock = state.lastBscBlock !== '0'
     ? BigInt(state.lastBscBlock)
     : latestBlock - BLOCKS_TO_SCAN;
 
-  const logs = await bscPublicClient.getLogs({
-    address: bscBridge,
-    event: BSC_BRIDGE_ABI[0],
-    fromBlock,
-    toBlock: latestBlock,
-  });
+  logger.info({ fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'Scanning BSC for deposits');
+
+  let logs;
+  try {
+    logs = await bscPublicClient.getLogs({
+      address: bscBridge,
+      event: BSC_BRIDGE_ABI[0],
+      fromBlock,
+      toBlock: latestBlock,
+    });
+  } catch (err) {
+    logger.error({ err, fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'BSC getLogs failed');
+    // Advance block pointer so next poll doesn't retry same huge range
+    state.lastBscBlock = latestBlock.toString();
+    return;
+  }
+
+  logger.info({ count: logs.length }, 'BSC deposit events found');
 
   for (const log of logs) {
     const txId = log.args.txId as `0x${string}`;
@@ -148,7 +167,6 @@ async function relayBscDeposits(
 
       logger.info({ txId, user, amount: amount.toString(), netAmount: netAmount.toString(), hash }, 'BSC→MChain mint sent');
       state.processedBscDeposits.push(txId);
-      // Keep set bounded
       if (state.processedBscDeposits.length > 10000) {
         state.processedBscDeposits = state.processedBscDeposits.slice(-5000);
       }
@@ -169,17 +187,35 @@ async function relayMchainWithdrawals(
   const key = getGasWalletKey();
   if (!key) return;
 
-  const latestBlock = await mchainPublicClient.getBlockNumber();
+  let latestBlock: bigint;
+  try {
+    latestBlock = await mchainPublicClient.getBlockNumber();
+  } catch (err) {
+    logger.error({ err }, 'MChain getBlockNumber failed');
+    return;
+  }
+
   const fromBlock = state.lastMchainBlock !== '0'
     ? BigInt(state.lastMchainBlock)
     : latestBlock - BLOCKS_TO_SCAN;
 
-  const logs = await mchainPublicClient.getLogs({
-    address: mchainBridge,
-    event: MCHAIN_BRIDGE_ABI[0],
-    fromBlock,
-    toBlock: latestBlock,
-  });
+  logger.info({ fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'Scanning MChain for withdrawals');
+
+  let logs;
+  try {
+    logs = await mchainPublicClient.getLogs({
+      address: mchainBridge,
+      event: MCHAIN_BRIDGE_ABI[0],
+      fromBlock,
+      toBlock: latestBlock,
+    });
+  } catch (err) {
+    logger.error({ err, fromBlock: fromBlock.toString(), toBlock: latestBlock.toString() }, 'MChain getLogs failed');
+    state.lastMchainBlock = latestBlock.toString();
+    return;
+  }
+
+  logger.info({ count: logs.length }, 'MChain withdrawal events found');
 
   for (const log of logs) {
     const txId = log.args.txId as `0x${string}`;
