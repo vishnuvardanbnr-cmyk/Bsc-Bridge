@@ -13,7 +13,7 @@ import {
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
 import { maybeSendLiquidityAlert } from '../lib/telegram.js';
-import { triggerRelayTick, processWithdrawalReceipt, loadState, saveState } from '../lib/relayer.js';
+import { processBscDepositReceipt, processWithdrawalReceipt, loadState, saveState } from '../lib/relayer.js';
 
 const router: IRouter = Router();
 
@@ -324,17 +324,25 @@ router.post('/bridge/notify', async (req, res) => {
       }
       req.log.warn({ txHash }, 'MChain withdrawal notify timed out');
     } else {
-      // ── BSC deposit: wait for confirmation then trigger relay tick ──
+      // ── BSC deposit: wait for confirmation then process receipt directly ──
+      const cfg2 = loadConfig();
       while (Date.now() < deadline) {
         try {
           const result = await getTxStatus(txHash as `0x${string}`);
           if (result.status === 'confirmed') {
-            req.log.info({ txHash }, 'Deposit confirmed — triggering immediate relay');
-            triggerRelayTick();
+            req.log.info({ txHash }, 'BSC deposit confirmed — processing receipt');
+            const state = loadState();
+            await processBscDepositReceipt(
+              txHash as `0x${string}`,
+              cfg2.contracts.bsc.bridge as `0x${string}`,
+              cfg2.contracts.mchain.bridge as `0x${string}`,
+              state,
+            );
+            saveState(state);
             return;
           }
           if (result.status === 'failed') {
-            req.log.warn({ txHash }, 'Deposit tx failed — skipping relay');
+            req.log.warn({ txHash }, 'BSC deposit tx failed — skipping relay');
             return;
           }
         } catch {
@@ -342,17 +350,18 @@ router.post('/bridge/notify', async (req, res) => {
         }
         await new Promise((r) => setTimeout(r, POLL_MS));
       }
-      req.log.warn({ txHash }, 'Deposit notify timed out waiting for confirmation');
+      req.log.warn({ txHash }, 'BSC deposit notify timed out waiting for confirmation');
     }
   })().catch(() => {});
 });
 
 // ── POST /bridge/recover ───────────────────────────────────────────────────────
-// Manually relay a MChain withdrawal that was missed (e.g. API was down when
-// the user submitted their tx).  Accepts the MChain tx hash and immediately
-// processes the receipt to call unlock() on BSC.
+// Manually relay a stuck tx (API was briefly down when the user submitted).
+//   chain: 'mchain' → MChain withdrawal → calls unlock() on BSC
+//   chain: 'bsc'    → BSC deposit       → calls mint() on MChain
 const RecoverBody = z.object({
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid tx hash'),
+  chain: z.enum(['bsc', 'mchain']).optional().default('mchain'),
 });
 
 router.post('/bridge/recover', async (req, res) => {
@@ -362,7 +371,7 @@ router.post('/bridge/recover', async (req, res) => {
     return;
   }
 
-  const { txHash } = parsed.data;
+  const { txHash, chain } = parsed.data;
   const cfg = loadConfig();
   const key = (await import('../lib/config.js')).getGasWalletKey();
   if (!key) {
@@ -371,52 +380,52 @@ router.post('/bridge/recover', async (req, res) => {
   }
 
   try {
-    const { mchainPublicClient } = await import('../lib/mchainClient.js');
+    if (chain === 'mchain') {
+      const { mchainPublicClient } = await import('../lib/mchainClient.js');
+      let receipt;
+      try {
+        receipt = await mchainPublicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+      } catch {
+        res.status(404).json({ error: 'Transaction not found or not yet mined on MChain' });
+        return;
+      }
+      if (!receipt) { res.status(404).json({ error: 'Transaction not found on MChain' }); return; }
+      if (receipt.status !== 'success') { res.status(400).json({ error: 'Transaction failed on MChain — nothing to relay' }); return; }
 
-    // Get receipt — must already be mined
-    let receipt;
-    try {
-      receipt = await mchainPublicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
-    } catch {
-      res.status(404).json({ error: 'Transaction not found or not yet mined on MChain' });
-      return;
+      const mchainBridge = cfg.contracts.mchain.bridge as `0x${string}`;
+      const hasLog = receipt.logs.some(l => l.address.toLowerCase() === mchainBridge.toLowerCase());
+      if (!hasLog) { res.status(400).json({ error: 'No bridge event found in this transaction' }); return; }
+
+      req.log.info({ txHash }, 'Manual recovery: MChain withdrawal');
+      const state = loadState();
+      await processWithdrawalReceipt(txHash as `0x${string}`, mchainBridge, cfg.contracts.bsc.bridge as `0x${string}`, state, key);
+      saveState(state);
+      res.json({ ok: true, message: 'Recovery processed — check your BSC wallet in ~30 seconds' });
+    } else {
+      const { publicClient: bscPublicClient } = await import('../lib/bscClient.js');
+      let receipt;
+      try {
+        receipt = await bscPublicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+      } catch {
+        res.status(404).json({ error: 'Transaction not found or not yet mined on BSC' });
+        return;
+      }
+      if (!receipt) { res.status(404).json({ error: 'Transaction not found on BSC' }); return; }
+      if (receipt.status !== 'success') { res.status(400).json({ error: 'Transaction failed on BSC — nothing to relay' }); return; }
+
+      const bscBridge = cfg.contracts.bsc.bridge as `0x${string}`;
+      const hasLog = receipt.logs.some(l => l.address.toLowerCase() === bscBridge.toLowerCase());
+      if (!hasLog) { res.status(400).json({ error: 'No bridge event found in this transaction' }); return; }
+
+      req.log.info({ txHash }, 'Manual recovery: BSC deposit');
+      const state = loadState();
+      await processBscDepositReceipt(txHash as `0x${string}`, bscBridge, cfg.contracts.mchain.bridge as `0x${string}`, state);
+      saveState(state);
+      res.json({ ok: true, message: 'Recovery processed — check your MChain wallet in ~30 seconds' });
     }
-
-    if (!receipt) {
-      res.status(404).json({ error: 'Transaction not found on MChain' });
-      return;
-    }
-    if (receipt.status !== 'success') {
-      res.status(400).json({ error: 'Transaction failed on MChain — nothing to relay' });
-      return;
-    }
-
-    const state = loadState();
-    const mchainBridge = cfg.contracts.mchain.bridge as `0x${string}`;
-
-    // Check if already processed
-    const hasWithdrawLog = receipt.logs.some(
-      l => l.address.toLowerCase() === mchainBridge.toLowerCase()
-    );
-    if (!hasWithdrawLog) {
-      res.status(400).json({ error: 'No bridge event found in this transaction' });
-      return;
-    }
-
-    req.log.info({ txHash }, 'Manual recovery: processing MChain withdrawal receipt');
-    await processWithdrawalReceipt(
-      txHash as `0x${string}`,
-      mchainBridge,
-      cfg.contracts.bsc.bridge as `0x${string}`,
-      state,
-      key,
-    );
-    saveState(state);
-
-    res.json({ ok: true, message: 'Recovery processed — check your BSC wallet in ~30 seconds' });
   } catch (err) {
     const e = err as Error;
-    req.log.error({ err, txHash }, 'bridge/recover failed');
+    req.log.error({ err, txHash, chain }, 'bridge/recover failed');
     res.status(500).json({ error: 'Recovery failed', message: e.message });
   }
 });
