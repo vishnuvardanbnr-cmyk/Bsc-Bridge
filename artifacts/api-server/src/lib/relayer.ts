@@ -27,10 +27,10 @@ const BRIDGE_FEE_BPS = 100; // 1% fee — must match frontend
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
 const BLOCKS_TO_SCAN = 1000n; // scan last N blocks on first start (BSC only)
 const MAX_BLOCK_RANGE = 1999n; // bsc-dataseed.binance.org hard cap ~2000 blocks
-// MChain block scan constants — MChain produces ~1 block/sec so 50 blocks ≈ 50s.
-// Do NOT increase: MChain RPC takes ~30ms per getBlock call, 50 blocks = ~1.5s per cycle.
-// The background scanner is a safety net; primary relay path is the /bridge/notify endpoint.
-const MCHAIN_MAX_BLOCKS_PER_SCAN = 50n;
+// Note: MChain withdrawals are NOT polled. The withdrawal is user-initiated so the
+// frontend calls /bridge/notify immediately with the tx hash. The server processes
+// the receipt on demand. For stuck txs (e.g. API was briefly down) there is a manual
+// recovery endpoint at /bridge/recover. No block scanning is needed or useful.
 
 // ── ABIs ────────────────────────────────────────────────────────────────────
 const BSC_BRIDGE_ABI = [
@@ -187,56 +187,6 @@ async function relayBscDeposits(
   state.lastBscBlock = latestBlock.toString();
 }
 
-// ── MChain → BSC relay (receipt-based scan) ──────────────────────────────────
-// MChain's eth_getLogs doesn't index logs reliably, so we scan blocks by
-// fetching each block's transactions and checking receipts for bridge txs.
-async function relayMchainWithdrawals(
-  state: RelayerState,
-  mchainBridge: `0x${string}`,
-  bscBridge: `0x${string}`,
-): Promise<void> {
-  const key = getGasWalletKey();
-  if (!key) return;
-
-  let latestBlock: bigint;
-  try {
-    latestBlock = await mchainPublicClient.getBlockNumber();
-  } catch (err) {
-    logger.error({ err }, 'MChain getBlockNumber failed');
-    return;
-  }
-
-  // Cap scan window: never scan more than MCHAIN_MAX_BLOCKS_PER_SCAN blocks per cycle.
-  // On first start (lastMchainBlock = '0'), begin from just 50 blocks back, not thousands.
-  const rawFrom = state.lastMchainBlock !== '0'
-    ? BigInt(state.lastMchainBlock)
-    : latestBlock - MCHAIN_MAX_BLOCKS_PER_SCAN;
-  const fromBlock = rawFrom > latestBlock ? latestBlock : rawFrom;
-  const toBlock = fromBlock + MCHAIN_MAX_BLOCKS_PER_SCAN < latestBlock
-    ? fromBlock + MCHAIN_MAX_BLOCKS_PER_SCAN
-    : latestBlock;
-
-  logger.info({ fromBlock: fromBlock.toString(), toBlock: toBlock.toString() }, 'Scanning MChain for withdrawals');
-
-  let bridgeTxCount = 0;
-  // Scan each block for txs to the bridge contract, then read receipts
-  for (let b = fromBlock; b <= toBlock; b++) {
-    try {
-      const block = await mchainPublicClient.getBlock({ blockNumber: b, includeTransactions: true });
-      const bridgeTxs = (block.transactions as { to?: string; hash: `0x${string}` }[])
-        .filter(tx => tx.to?.toLowerCase() === mchainBridge.toLowerCase());
-      bridgeTxCount += bridgeTxs.length;
-      for (const tx of bridgeTxs) {
-        await processWithdrawalReceipt(tx.hash, mchainBridge, bscBridge, state, key);
-      }
-    } catch (err) {
-      logger.error({ err, block: b.toString() }, 'MChain block scan failed');
-    }
-  }
-
-  logger.info({ count: bridgeTxCount }, 'MChain bridge txs found');
-  state.lastMchainBlock = toBlock.toString();
-}
 
 // ── Process a single MChain withdrawal by tx hash ────────────────────────────
 // Used by both the background scanner and the on-demand notify endpoint.
@@ -346,10 +296,7 @@ export function startRelayer(): void {
 
     const state = loadState();
     try {
-      await Promise.allSettled([
-        relayBscDeposits(state, bscBridge, mchainBridge),
-        relayMchainWithdrawals(state, mchainBridge, bscBridge),
-      ]);
+      await relayBscDeposits(state, bscBridge, mchainBridge);
     } finally {
       saveState(state);
     }
