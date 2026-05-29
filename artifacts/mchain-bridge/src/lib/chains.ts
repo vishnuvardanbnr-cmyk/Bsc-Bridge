@@ -1,6 +1,6 @@
 import { getDefaultConfig, darkTheme } from '@rainbow-me/rainbowkit';
 import { bsc } from 'wagmi/chains';
-import { defineChain } from 'viem';
+import { defineChain, http } from 'viem';
 
 export const mchain = defineChain({
   id: 1888,
@@ -14,6 +14,10 @@ export const wagmiConfig = getDefaultConfig({
   appName: 'MChain Bridge',
   projectId: 'mchain-bridge-placeholder',
   chains: [bsc, mchain],
+  transports: {
+    [bsc.id]: http('https://bsc.publicnode.com'),
+    [mchain.id]: http('https://node.mymchain.com/api/rpc'),
+  },
 });
 
 export const rainbowTheme = darkTheme({
