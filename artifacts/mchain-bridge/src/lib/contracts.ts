@@ -2,12 +2,12 @@ import { type Address } from 'viem';
 
 export const CONTRACTS = {
   bsc: {
-    bridge: '0xf8e81D47203A594245E36C48e151709F0C19fBe8' as Address,
+    bridge: '0x1765C355ab987Cc7Bf79b251F495b63F591B3a4b' as Address,
     token: '0x55d398326f99059fF775485246999027B3197955' as Address,
   },
   mchain: {
-    bridge: '0x0000000000000000000000000000000000000004' as Address,
-    token: '0x0000000000000000000000000000000000000002' as Address,
+    bridge: '0x205aa52e0196e06c1f6ca5059ff079df1204495c' as Address,
+    token: '0xab8c6267dcca9e70b625014c8f77eee9728e14c3' as Address,
   },
 } as const;
 
