@@ -420,25 +420,6 @@ export function BridgeWidget() {
               </p>
             )}
 
-            {/* BNB gas status — shown after a check on BSC */}
-            {isConnected && isBsc && gasSubsidy.checkResult && (
-              <div className={cn(
-                'flex items-center gap-2 text-xs mb-4',
-                gasSubsidy.checkResult.needsGas ? 'text-danger' : 'text-success'
-              )}>
-                {gasSubsidy.checkResult.needsGas ? (
-                  <>
-                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span>You need at least 0.003 BNB in your wallet for gas fees</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>BNB gas balance OK</span>
-                  </>
-                )}
-              </div>
-            )}
 
             {/* Bridge Details — always visible */}
             <div className="mb-5">
@@ -462,14 +443,6 @@ export function BridgeWidget() {
                           {isBsc ? 'BSC → MChain' : 'MChain → BSC'}
                         </span>
                       </div>
-                      {isBsc && (
-                        <div className="flex justify-between items-center">
-                          <span className="text-[12px] text-muted-foreground">Gas Required</span>
-                          <span className="text-[13px] font-semibold text-foreground flex items-center gap-1">
-                            <Fuel className="w-3 h-3" /> Min 0.003 BNB
-                          </span>
-                        </div>
-                      )}
                       <div className="flex justify-between items-center">
                         <span className="text-[12px] text-muted-foreground">Contract</span>
                         <a

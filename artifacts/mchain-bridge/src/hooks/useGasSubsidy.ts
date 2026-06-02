@@ -60,12 +60,6 @@ export function useGasSubsidy() {
         return false;
       }
 
-      if (check.needsGas) {
-        setError('Insufficient BNB for gas. You need at least 0.003 BNB in your wallet to cover transaction fees.');
-        setStep('error');
-        return false;
-      }
-
       setStep('ready');
       return true;
     } catch (err) {
