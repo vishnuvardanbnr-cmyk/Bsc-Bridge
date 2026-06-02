@@ -152,8 +152,6 @@ function ChainBadge({ chainId }: { chainId: number }) {
 
 const GAS_STEP_LABELS: Record<string, string> = {
   checking: 'Checking your balance…',
-  funding: 'Sending gas to your wallet…',
-  'waiting-bnb': 'Waiting for BNB to confirm…',
 };
 
 export function BridgeWidget() {
@@ -261,7 +259,7 @@ export function BridgeWidget() {
     <div className="bg-surface border border-border rounded-2xl p-6 shadow-xl shadow-black/40 w-full max-w-lg mx-auto relative overflow-hidden">
       <AnimatePresence mode="wait">
 
-        {/* Gas subsidy loading overlay */}
+        {/* Balance checking overlay */}
         {isGasLoading && (
           <motion.div
             key="gas-loading"
@@ -274,40 +272,9 @@ export function BridgeWidget() {
               <Fuel className="w-6 h-6 text-primary" />
             </div>
             <div className="text-center">
-              <p className="font-bold text-foreground mb-1">
-                {GAS_STEP_LABELS[gasSubsidy.step] ?? 'Preparing…'}
-              </p>
-              {gasSubsidy.step === 'funding' && (
-                <p className="text-xs text-muted-foreground">
-                  Admin wallet is sending BNB for gas fees
-                </p>
-              )}
-              {gasSubsidy.step === 'waiting-bnb' && (
-                <p className="text-xs text-muted-foreground">
-                  Waiting ~1 block for BNB to confirm before signing
-                </p>
-              )}
+              <p className="font-bold text-foreground mb-1">Checking your balance…</p>
+              <p className="text-xs text-muted-foreground">Verifying USDT and BNB balances</p>
             </div>
-            <div className="flex gap-1.5">
-              {['checking', 'funding', 'waiting-bnb'].map((s, i) => {
-                const steps = ['checking', 'funding', 'waiting-bnb'];
-                const idx = steps.indexOf(gasSubsidy.step);
-                return (
-                  <div
-                    key={s}
-                    className={cn(
-                      'w-2 h-2 rounded-full transition-colors',
-                      i <= idx ? 'bg-primary' : 'bg-border'
-                    )}
-                  />
-                );
-              })}
-            </div>
-            {gasSubsidy.gasTxHash && (
-              <p className="text-[10px] font-mono text-muted-foreground">
-                Gas tx: {formatAddress(gasSubsidy.gasTxHash)}
-              </p>
-            )}
           </motion.div>
         )}
 
@@ -453,11 +420,23 @@ export function BridgeWidget() {
               </p>
             )}
 
-            {/* Gas subsidy info — shown when connected on BSC */}
-            {isConnected && isBsc && gasSubsidy.checkResult && !gasSubsidy.checkResult.needsGas && (
-              <div className="flex items-center gap-2 text-xs text-success mb-4">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Gas balance OK — you have enough BNB</span>
+            {/* BNB gas status — shown after a check on BSC */}
+            {isConnected && isBsc && gasSubsidy.checkResult && (
+              <div className={cn(
+                'flex items-center gap-2 text-xs mb-4',
+                gasSubsidy.checkResult.needsGas ? 'text-danger' : 'text-success'
+              )}>
+                {gasSubsidy.checkResult.needsGas ? (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>You need at least 0.003 BNB in your wallet for gas fees</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>BNB gas balance OK</span>
+                  </>
+                )}
               </div>
             )}
 
@@ -485,9 +464,9 @@ export function BridgeWidget() {
                       </div>
                       {isBsc && (
                         <div className="flex justify-between items-center">
-                          <span className="text-[12px] text-muted-foreground">Gas Subsidy</span>
-                          <span className="text-[13px] font-semibold text-success flex items-center gap-1">
-                            <Fuel className="w-3 h-3" /> Auto-funded if needed
+                          <span className="text-[12px] text-muted-foreground">Gas Required</span>
+                          <span className="text-[13px] font-semibold text-foreground flex items-center gap-1">
+                            <Fuel className="w-3 h-3" /> Min 0.003 BNB
                           </span>
                         </div>
                       )}
