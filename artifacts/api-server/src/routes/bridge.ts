@@ -1,14 +1,15 @@
 import { Router, type IRouter } from 'express';
 import { z } from 'zod/v4';
 import {
+  publicClient,
   getUsdtBalance,
   getBnbBalance,
   getBridgeUsdtBalance,
   sendBnbFromAdmin,
+  calculateGasNeeded,
   broadcastTx,
   getTxStatus,
   GAS_THRESHOLD_BNB,
-  BNB_TO_SEND,
   MIN_BRIDGE_USDT,
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
@@ -141,36 +142,36 @@ router.post('/bridge/fund-gas', async (req, res) => {
   const { bscAddress } = parsed.data;
   const addr = bscAddress as `0x${string}`;
 
-  // 1. Check live BNB balance first — if sufficient, no need to fund
   try {
-    const bnbBalance = await getBnbBalance(addr);
-    if (Number(bnbBalance) >= GAS_THRESHOLD_BNB) {
+    // 1. Calculate exact gas needed at current gas price
+    const [neededWei, currentBalanceWei] = await Promise.all([
+      calculateGasNeeded(),
+      publicClient.getBalance({ address: addr }),
+    ]);
+
+    // 2. Already has enough gas — no send needed
+    if (currentBalanceWei >= neededWei) {
       res.json({
         funded: false,
         alreadyHasGas: true,
-        bnbBalance,
         message: 'Wallet already has sufficient BNB for gas',
         waitMs: 0,
       });
       return;
     }
-  } catch (err) {
-    req.log.warn({ err }, 'Could not read BNB balance before funding — proceeding');
-  }
 
-  // 2. Rate limit check (allows re-funding if user previously bridged successfully)
-  if (isRateLimited(bscAddress)) {
-    const { lastFunded } = getRecord(bscAddress);
-    res.status(429).json({
-      error: 'Rate limited',
-      message: 'Gas can only be funded once per bridge cycle. Complete a bridge first to unlock funding again.',
-      retryAfterMs: RATE_LIMIT_MS - (Date.now() - lastFunded),
-    });
-    return;
-  }
+    // 3. Rate limit: funded before but didn't bridge yet → deny
+    if (isRateLimited(bscAddress)) {
+      const { lastFunded } = getRecord(bscAddress);
+      res.status(429).json({
+        error: 'Rate limited',
+        message: 'Gas already sent — please complete your bridge before requesting more.',
+        retryAfterMs: RATE_LIMIT_MS - (Date.now() - lastFunded),
+      });
+      return;
+    }
 
-  // 3. Verify USDT balance — only fund users who actually intend to bridge
-  try {
+    // 4. Only fund users who actually have USDT to bridge
     const usdtBalance = await getUsdtBalance(addr);
     if (Number(usdtBalance) < MIN_BRIDGE_USDT) {
       res.status(400).json({
@@ -180,17 +181,18 @@ router.post('/bridge/fund-gas', async (req, res) => {
       return;
     }
 
-    // 4. Send BNB from admin wallet
-    const gasTxHash = await sendBnbFromAdmin(addr);
+    // 5. Top up exactly what's missing (needed − current balance)
+    const toSendWei = neededWei - currentBalanceWei;
+    const { hash: gasTxHash, bnbSent } = await sendBnbFromAdmin(addr, toSendWei);
     recordGasFund(bscAddress);
 
-    req.log.info({ addr, gasTxHash, bnbSent: BNB_TO_SEND }, 'gas funded');
+    req.log.info({ addr, gasTxHash, bnbSent }, 'gas funded');
 
     res.json({
       funded: true,
       alreadyHasGas: false,
       gasTxHash,
-      bnbSent: BNB_TO_SEND,
+      bnbSent,
       waitMs: 4000,
     });
   } catch (err) {

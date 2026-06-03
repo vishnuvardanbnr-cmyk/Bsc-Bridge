@@ -1,13 +1,29 @@
-import { createPublicClient, createWalletClient, http, parseEther, formatEther, formatUnits } from 'viem';
+import { createPublicClient, createWalletClient, http, formatEther, formatUnits } from 'viem';
 import { bsc } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getGasWalletKey } from './config.js';
 
 const BSC_RPC = 'https://bsc.publicnode.com';
 
-export const GAS_THRESHOLD_BNB = 0.003;
-export const BNB_TO_SEND = '0.003';
+// Minimum BNB heuristic used only by /bridge/check to show the "needs gas" warning.
+// Actual funding uses a live gas-price calculation (see calculateGasNeeded).
+export const GAS_THRESHOLD_BNB = 0.001;
 export const MIN_BRIDGE_USDT = 1;
+
+// Gas units for the two user-side BSC transactions (approve + deposit), +20% buffer.
+const GAS_APPROVE  = 60_000n;
+const GAS_DEPOSIT  = 180_000n;
+const GAS_BUFFER   = 120n; // multiply total by 120/100
+
+/**
+ * Returns the exact BNB (in wei) needed to cover approve + deposit on BSC
+ * at the current gas price, with a 20% safety buffer.
+ */
+export async function calculateGasNeeded(): Promise<bigint> {
+  const gasPrice = await publicClient.getGasPrice();
+  const totalGas = (GAS_APPROVE + GAS_DEPOSIT) * GAS_BUFFER / 100n;
+  return gasPrice * totalGas;
+}
 
 export const publicClient = createPublicClient({
   chain: bsc,
@@ -55,7 +71,14 @@ export async function getBridgeUsdtBalance(
   return formatUnits(raw, 18);
 }
 
-export async function sendBnbFromAdmin(toAddress: `0x${string}`): Promise<`0x${string}`> {
+/**
+ * Send an exact amount of BNB (in wei) from the admin wallet to a user.
+ * Returns the tx hash and the human-readable BNB amount sent.
+ */
+export async function sendBnbFromAdmin(
+  toAddress: `0x${string}`,
+  amountWei: bigint,
+): Promise<{ hash: `0x${string}`; bnbSent: string }> {
   const adminKey = getGasWalletKey();
   if (!adminKey) throw new Error('BRIDGE_ADMIN_PRIVATE_KEY not configured');
 
@@ -68,10 +91,10 @@ export async function sendBnbFromAdmin(toAddress: `0x${string}`): Promise<`0x${s
 
   const hash = await walletClient.sendTransaction({
     to: toAddress,
-    value: parseEther(BNB_TO_SEND),
+    value: amountWei,
   });
 
-  return hash;
+  return { hash, bnbSent: formatEther(amountWei) };
 }
 
 export async function broadcastTx(signedTx: `0x${string}`): Promise<`0x${string}`> {
