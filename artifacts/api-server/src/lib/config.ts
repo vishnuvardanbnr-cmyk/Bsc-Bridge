@@ -29,8 +29,8 @@ const DEFAULTS: AppConfig = {
       token: '0x55d398326f99059fF775485246999027B3197955',
     },
     mchain: {
-      bridge: '0x205aa52e0196e06c1f6ca5059ff079df1204495c',
-      token: '0xab8c6267dcca9e70b625014c8f77eee9728e14c3',
+      bridge: '0x81321895560887229979485dc36886436a0d38b7',
+      token: '0x7b2ed1be97fa240dbd0328dd307e35e588bcb917',
     },
   },
   maxLiquidityUsd: 10000,
