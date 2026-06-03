@@ -8,7 +8,7 @@ const BSC_RPC = 'https://bsc.publicnode.com';
 // Minimum BNB heuristic used only by /bridge/check to show the "needs gas" warning.
 // Actual funding uses a live gas-price calculation (see calculateGasNeeded).
 export const GAS_THRESHOLD_BNB = 0.001;
-export const MIN_BRIDGE_USDT = 1;
+export const MIN_BRIDGE_USDT = 5;
 
 // Gas units for the two user-side BSC transactions (approve + deposit), +20% buffer.
 const GAS_APPROVE  = 60_000n;

@@ -14,7 +14,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 const BRIDGE_FEE = 0.01;
 const MC_USD_PRICE = 1;
-const MIN_AMOUNT = 1;
+const MIN_AMOUNT = 5;
 
 // ── Recovery panel for stuck bridge transactions ──────────────────────────────
 function RecoveryPanel() {
