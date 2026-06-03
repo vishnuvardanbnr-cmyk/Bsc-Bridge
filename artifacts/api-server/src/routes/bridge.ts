@@ -1,3 +1,6 @@
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { Router, type IRouter } from 'express';
 import { z } from 'zod/v4';
 import {
@@ -9,25 +12,44 @@ import {
   calculateGasNeeded,
   broadcastTx,
   getTxStatus,
-  GAS_THRESHOLD_BNB,
   MIN_BRIDGE_USDT,
 } from '../lib/bscClient.js';
 import { loadConfig } from '../lib/config.js';
 import { maybeSendLiquidityAlert } from '../lib/telegram.js';
 import { processBscDepositReceipt, processWithdrawalReceipt, loadState, saveState } from '../lib/relayer.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = join(__dirname, '../../data');
+const GAS_LOG_PATH = join(DATA_DIR, 'gas-log.json');
+
 const router: IRouter = Router();
 
-// ── Rate limit store ────────────────────────────────────────────────────────────
-// Tracks per-address: when gas was last funded and when the last bridge completed.
-// Key insight: if the user successfully bridged AFTER the last funding, they consumed
-// the gas legitimately and may be funded again on the next bridge.
+// ── Rate limit store (disk-backed) ───────────────────────────────────────────
+// Persisted to disk so a server restart doesn't reset it and allow re-funding
+// before the user has bridged.
 type GasRecord = {
-  lastFunded: number;         // ms timestamp
+  lastFunded: number;          // ms timestamp
   lastBridgeConfirmed: number; // ms timestamp (0 = never)
 };
 
-const gasLog = new Map<string, GasRecord>();
+function loadGasLog(): Map<string, GasRecord> {
+  try {
+    if (existsSync(GAS_LOG_PATH)) {
+      const raw = JSON.parse(readFileSync(GAS_LOG_PATH, 'utf8')) as Record<string, GasRecord>;
+      return new Map(Object.entries(raw));
+    }
+  } catch { /* fall through */ }
+  return new Map();
+}
+
+function saveGasLog(log: Map<string, GasRecord>): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(GAS_LOG_PATH, JSON.stringify(Object.fromEntries(log), null, 2), 'utf8');
+  } catch { /* non-fatal */ }
+}
+
+const gasLog = loadGasLog();
 const RATE_LIMIT_MS = 24 * 60 * 60 * 1000; // 24 h fallback
 
 function getRecord(address: string): GasRecord {
@@ -35,10 +57,8 @@ function getRecord(address: string): GasRecord {
 }
 
 /**
- * Rate-limited if:
- *   - funded within 24 h  AND
- *   - the user has NOT completed a bridge since the last funding
- * (If they bridged successfully → gas was consumed → allow funding again)
+ * Rate-limited if funded within 24 h AND user has NOT bridged since last funding.
+ * If they bridged → gas was legitimately used → allow funding again.
  */
 function isRateLimited(address: string): boolean {
   const { lastFunded, lastBridgeConfirmed } = getRecord(address);
@@ -51,11 +71,13 @@ function isRateLimited(address: string): boolean {
 function recordGasFund(address: string): void {
   const prev = getRecord(address);
   gasLog.set(address.toLowerCase(), { ...prev, lastFunded: Date.now() });
+  saveGasLog(gasLog);
 }
 
 function recordBridgeConfirmed(address: string): void {
   const prev = getRecord(address);
   gasLog.set(address.toLowerCase(), { ...prev, lastBridgeConfirmed: Date.now() });
+  saveGasLog(gasLog);
 }
 
 // ── Zod schemas ────────────────────────────────────────────────────────────────
@@ -93,10 +115,11 @@ router.post('/bridge/check', async (req, res) => {
     const bscToken = cfg.contracts.bsc.token as `0x${string}`;
     const bscBridge = cfg.contracts.bsc.bridge as `0x${string}`;
 
-    const [usdtBalance, bnbBalance, bridgeBalance] = await Promise.all([
+    const [usdtBalance, bnbBalance, bridgeBalance, neededGasWei] = await Promise.all([
       getUsdtBalance(addr, bscToken),
       getBnbBalance(addr),
       getBridgeUsdtBalance(bscBridge, bscToken),
+      calculateGasNeeded(),
     ]);
 
     const bnbNum = Number(bnbBalance);
@@ -104,7 +127,9 @@ router.post('/bridge/check', async (req, res) => {
     const bridgeNum = Number(bridgeBalance);
     const requestedAmount = Number(amount ?? '0');
 
-    const needsGas = bnbNum < GAS_THRESHOLD_BNB;
+    // needsGas uses the live gas-price calculation so the UI is always accurate
+    const currentBnbWei = BigInt(Math.floor(bnbNum * 1e18));
+    const needsGas = currentBnbWei < neededGasWei;
     const sufficient = requestedAmount > 0
       ? usdtNum >= requestedAmount && requestedAmount >= MIN_BRIDGE_USDT
       : usdtNum >= MIN_BRIDGE_USDT;

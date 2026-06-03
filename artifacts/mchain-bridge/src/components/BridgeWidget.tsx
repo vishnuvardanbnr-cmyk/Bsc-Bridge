@@ -16,9 +16,10 @@ const BRIDGE_FEE = 0.01;
 const MC_USD_PRICE = 1;
 const MIN_AMOUNT = 1;
 
-// ── Recovery panel for stuck MChain withdrawals ──────────────────────────────
+// ── Recovery panel for stuck bridge transactions ──────────────────────────────
 function RecoveryPanel() {
   const [open, setOpen] = useState(false);
+  const [chain, setChain] = useState<'mchain' | 'bsc'>('mchain');
   const [txHash, setTxHash] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -35,12 +36,12 @@ function RecoveryPanel() {
       const res = await fetch('/api/bridge/recover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash }),
+        body: JSON.stringify({ txHash, chain }),
       });
       const data = await res.json() as { ok?: boolean; message?: string; error?: string };
       if (res.ok && data.ok) {
         setStatus('ok');
-        setMessage(data.message ?? 'Recovery submitted — check your BSC wallet shortly');
+        setMessage(data.message ?? 'Recovery submitted — check your wallet shortly');
       } else {
         setStatus('error');
         setMessage(data.error ?? 'Recovery failed');
@@ -49,7 +50,16 @@ function RecoveryPanel() {
       setStatus('error');
       setMessage('Network error — please try again');
     }
-  }, [txHash]);
+  }, [txHash, chain]);
+
+  const descriptions = {
+    mchain: 'Submitted a MChain → BSC withdrawal but didn\'t receive USDT on BSC.',
+    bsc:    'Submitted a BSC → MChain deposit but didn\'t receive mUSDT on MChain.',
+  };
+  const placeholders = {
+    mchain: '0x... (MChain withdrawal tx hash)',
+    bsc:    '0x... (BSC deposit tx hash)',
+  };
 
   return (
     <div className="mt-4 border-t border-border/40 pt-4">
@@ -58,7 +68,7 @@ function RecoveryPanel() {
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
         <RotateCcw className="w-3 h-3" />
-        Withdrawal stuck? Recover it here
+        Transaction stuck? Recover it here
       </button>
       <AnimatePresence>
         {open && (
@@ -69,12 +79,25 @@ function RecoveryPanel() {
             className="overflow-hidden"
           >
             <div className="pt-3 flex flex-col gap-2">
-              <p className="text-xs text-muted-foreground">
-                If you submitted a MChain → BSC withdrawal but didn't receive USDT, paste the MChain transaction hash below to manually trigger the relay.
-              </p>
+              {/* Chain selector */}
+              <div className="flex rounded-lg overflow-hidden border border-border text-xs font-semibold">
+                <button
+                  onClick={() => { setChain('mchain'); setStatus('idle'); setMessage(''); }}
+                  className={cn('flex-1 py-1.5 transition-colors', chain === 'mchain' ? 'bg-primary text-white' : 'bg-surface-raised text-muted-foreground hover:text-foreground')}
+                >
+                  MChain → BSC
+                </button>
+                <button
+                  onClick={() => { setChain('bsc'); setStatus('idle'); setMessage(''); }}
+                  className={cn('flex-1 py-1.5 transition-colors', chain === 'bsc' ? 'bg-primary text-white' : 'bg-surface-raised text-muted-foreground hover:text-foreground')}
+                >
+                  BSC → MChain
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">{descriptions[chain]}</p>
               <input
                 type="text"
-                placeholder="0x... (MChain withdrawal tx hash)"
+                placeholder={placeholders[chain]}
                 value={txHash}
                 onChange={e => { setTxHash(e.target.value.trim()); setStatus('idle'); }}
                 className="bg-surface-raised border border-border rounded-lg px-3 py-2 text-xs font-mono text-foreground outline-none focus:border-primary w-full placeholder:text-muted-foreground/50"
@@ -99,7 +122,7 @@ function RecoveryPanel() {
                     : 'bg-primary text-white hover:opacity-90'
                 )}
               >
-                {status === 'loading' ? 'Processing…' : 'Recover Withdrawal'}
+                {status === 'loading' ? 'Processing…' : 'Recover Transaction'}
               </button>
             </div>
           </motion.div>
