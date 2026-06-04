@@ -290,6 +290,42 @@ router.get('/bridge/status/:txHash', async (req, res) => {
   }
 });
 
+// ── GET /bridge/bsc-liquidity ─────────────────────────────────────────────────
+// MChain → BSC pre-check: does the BSC bridge contract hold enough USDT to pay
+// out this withdrawal?  Called by the frontend before the user submits the
+// MChain burn tx so we can warn them early.
+router.get('/bridge/bsc-liquidity', async (req, res) => {
+  const rawAmount = req.query['amount'];
+  const amount = rawAmount ? Number(rawAmount) : 0;
+
+  if (isNaN(amount) || amount < 0) {
+    res.status(400).json({ error: 'Invalid amount' });
+    return;
+  }
+
+  try {
+    const cfg = loadConfig();
+    const bscToken = cfg.contracts.bsc.token as `0x${string}`;
+    const bscBridge = cfg.contracts.bsc.bridge as `0x${string}`;
+
+    const bridgeBalance = await getBridgeUsdtBalance(bscBridge, bscToken);
+    const bridgeNum = Number(bridgeBalance);
+
+    // The user receives amount minus 1% fee — we need at least that in the contract
+    const needed = amount > 0 ? amount * 0.99 : 0;
+    const sufficient = bridgeNum >= needed;
+
+    res.json({
+      sufficient,
+      bridgeBalance: bridgeNum.toFixed(2),
+      needed: needed.toFixed(2),
+    });
+  } catch (err) {
+    req.log.error({ err }, 'bridge/bsc-liquidity check failed');
+    res.status(500).json({ error: 'Failed to check BSC liquidity' });
+  }
+});
+
 // ── POST /bridge/notify ────────────────────────────────────────────────────────
 // Frontend calls this right after submitting a deposit or withdrawal tx.
 //   chain: 'bsc'    → BSC deposit: wait for confirmation, trigger relay tick

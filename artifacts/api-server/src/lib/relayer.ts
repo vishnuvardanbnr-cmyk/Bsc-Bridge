@@ -20,9 +20,9 @@ import { fileURLToPath } from 'url';
 import { createWalletClient, http, decodeEventLog } from 'viem';
 import { bsc } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
-import { publicClient as bscPublicClient } from './bscClient.js';
+import { publicClient as bscPublicClient, getBridgeUsdtBalance } from './bscClient.js';
 import { mchainPublicClient, getMchainWalletClient } from './mchainClient.js';
-import { getGasWalletKey } from './config.js';
+import { getGasWalletKey, loadConfig } from './config.js';
 import { logger } from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -229,6 +229,30 @@ export async function processWithdrawalReceipt(
     }
 
     const netAmount = applyFee(amount);
+
+    // ── BSC liquidity guard ──────────────────────────────────────────────────
+    // Before calling unlock(), confirm the BSC bridge contract holds enough
+    // USDT to cover the payout.  If not, skip without marking as processed so
+    // it can be retried automatically (e.g. after admin tops up liquidity).
+    try {
+      const cfg = loadConfig();
+      const bscTokenAddr = cfg.contracts.bsc.token as `0x${string}`;
+      const bscBridgeAddr = bscBridge;
+      const bridgeBalanceStr = await getBridgeUsdtBalance(bscBridgeAddr, bscTokenAddr);
+      const bridgeBalanceRaw = BigInt(Math.floor(Number(bridgeBalanceStr) * 1e18));
+      if (bridgeBalanceRaw < netAmount) {
+        logger.warn(
+          { txId, netAmount: netAmount.toString(), bridgeBalance: bridgeBalanceStr },
+          'BSC bridge has insufficient USDT liquidity — withdrawal NOT processed. Will retry when liquidity is restored.',
+        );
+        // Do NOT push to processedMchainWithdraws — leave it unprocessed so
+        // the admin can trigger a recovery once liquidity is restored.
+        continue;
+      }
+    } catch (liquidityErr) {
+      logger.error({ liquidityErr, txId }, 'Failed to check BSC bridge liquidity — skipping unlock for safety');
+      continue;
+    }
 
     try {
       const account = privateKeyToAccount(key as `0x${string}`);

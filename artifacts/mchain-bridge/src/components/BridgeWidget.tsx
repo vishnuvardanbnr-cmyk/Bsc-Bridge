@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAccount, useBalance, useSwitchChain } from 'wagmi';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2, RotateCcw } from 'lucide-react';
@@ -186,6 +186,34 @@ export function BridgeWidget() {
     }
   }, [address, toChainId]);
 
+  // ── MChain → BSC liquidity pre-check ─────────────────────────────────────
+  const [bscLiquidity, setBscLiquidity] = useState<{ sufficient: boolean; bridgeBalance: string } | null>(null);
+  const liquidityDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // Only run when bridging FROM MChain → TO BSC
+    if (fromChainId === mchain.id && numAmount >= MIN_AMOUNT) {
+      if (liquidityDebounce.current) clearTimeout(liquidityDebounce.current);
+      setBscLiquidity(null);
+      liquidityDebounce.current = setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/bridge/bsc-liquidity?amount=${numAmount}`);
+          if (res.ok) {
+            const data = await res.json() as { sufficient: boolean; bridgeBalance: string };
+            setBscLiquidity(data);
+          }
+        } catch {
+          // silently ignore — don't block the user on a network error
+        }
+      }, 600);
+    } else {
+      setBscLiquidity(null);
+    }
+    return () => { if (liquidityDebounce.current) clearTimeout(liquidityDebounce.current); };
+  }, [fromChainId, numAmount]);
+
+  const insufficientBscLiquidity = fromChainId === mchain.id && bscLiquidity !== null && !bscLiquidity.sufficient;
+
   const gasSubsidy = useGasSubsidy();
   const { step, error, txHash, handleBridge, reset: resetBridge, needsApproval } = useBridge(
     fromChainId, toChainId, amount, destinationAddress
@@ -248,6 +276,7 @@ export function BridgeWidget() {
     if (hasInsufficientBalance) return { label: 'Insufficient Balance', disabled: true, action: 'none' as const };
     if (!destinationAddress || destinationAddress.length < 10) return { label: 'Enter Destination Address', disabled: true, action: 'none' as const };
     if (isDestinationInvalid) return { label: 'Invalid Destination Address', disabled: true, action: 'none' as const };
+    if (insufficientBscLiquidity) return { label: 'Insufficient BSC Liquidity', disabled: true, action: 'none' as const };
     if (isGasLoading) return { label: GAS_STEP_LABELS[gasSubsidy.step] ?? 'Preparing…', disabled: true, action: 'none' as const };
     if (needsApproval) return { label: 'Approve & Bridge', disabled: false, action: 'bridge' as const };
     return { label: `Bridge ${formatAmount(numAmount)} USDT`, disabled: false, action: 'bridge' as const };
@@ -390,6 +419,17 @@ export function BridgeWidget() {
               <p className="text-warning text-xs font-semibold mb-3 text-right flex items-center justify-end gap-1">
                 <AlertTriangle className="w-3 h-3" /> Minimum bridge amount is {MIN_AMOUNT} USDT
               </p>
+            )}
+            {insufficientBscLiquidity && (
+              <div className="mb-3 bg-[#2A1A00] border border-amber-800 rounded-xl p-3 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-amber-400 text-xs font-semibold">Insufficient BSC liquidity</p>
+                  <p className="text-amber-400/70 text-xs mt-0.5">
+                    The BSC bridge currently holds only ${bscLiquidity?.bridgeBalance} USDT — not enough to cover your withdrawal. Please try again later.
+                  </p>
+                </div>
+              </div>
             )}
 
             {/* Destination Address */}
