@@ -35,14 +35,12 @@ export function useWeb3Bridge() {
         params: [{ chainId: chainHex }],
       });
     } catch (err: any) {
-      if (err?.code === 4902) {
+      // 4902 = chain not added yet — add it, then the wallet auto-switches
+      if (err?.code === 4902 || err?.code === -32603) {
         try {
           await ethereum.request({ method: 'wallet_addEthereumChain', params: [network] });
         } catch { }
       }
-      try {
-        await ethereum.request({ method: 'wallet_addEthereumChain', params: [network] });
-      } catch { }
     }
     const newId = await readChainId();
     if (newId !== null) setCurrentChainId(newId);
