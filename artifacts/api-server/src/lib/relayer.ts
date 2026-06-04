@@ -80,6 +80,12 @@ const MCHAIN_BRIDGE_ABI = [
   },
 ] as const;
 
+// ── In-memory lock: prevents concurrent relay of the same txId ───────────────
+// Guards against the race where /bridge/notify and /bridge/recover both fire
+// for the same tx simultaneously. Smart contract reverts duplicates anyway, but
+// the lock avoids the wasted gas + confusing error.
+const inFlightTxIds = new Set<string>();
+
 // ── Persistent state ─────────────────────────────────────────────────────────
 type RelayerState = {
   processedBscDeposits: string[];       // txId hex strings already minted on MChain
@@ -157,6 +163,12 @@ export async function processBscDepositReceipt(
       continue;
     }
 
+    if (inFlightTxIds.has(txId)) {
+      logger.info({ txId }, 'BSC deposit already in-flight — skip');
+      continue;
+    }
+    inFlightTxIds.add(txId);
+
     const netAmount = applyFee(amount);
 
     try {
@@ -175,6 +187,8 @@ export async function processBscDepositReceipt(
       }
     } catch (err) {
       logger.error({ err, txId }, 'Failed to mint on MChain');
+    } finally {
+      inFlightTxIds.delete(txId);
     }
   }
 }
@@ -222,55 +236,67 @@ export async function processWithdrawalReceipt(
       continue;
     }
 
-    if (!/^0x[0-9a-fA-F]{40}$/i.test(destinationAddress)) {
-      logger.warn({ txId, destinationAddress }, 'Invalid BSC destination address — skipping');
-      state.processedMchainWithdraws.push(txId);
+    if (inFlightTxIds.has(txId)) {
+      logger.info({ txId }, 'MChain withdrawal already in-flight — skip');
       continue;
     }
+    inFlightTxIds.add(txId);
 
-    const netAmount = applyFee(amount);
-
-    // ── BSC liquidity guard ──────────────────────────────────────────────────
-    // Before calling unlock(), confirm the BSC bridge contract holds enough
-    // USDT to cover the payout.  If not, skip without marking as processed so
-    // it can be retried automatically (e.g. after admin tops up liquidity).
+    // try/finally ensures the in-flight lock is always released — even when
+    // inner continue statements skip to the next loop iteration.
     try {
-      const cfg = loadConfig();
-      const bscTokenAddr = cfg.contracts.bsc.token as `0x${string}`;
-      const bscBridgeAddr = bscBridge;
-      const bridgeBalanceStr = await getBridgeUsdtBalance(bscBridgeAddr, bscTokenAddr);
-      const bridgeBalanceRaw = BigInt(Math.floor(Number(bridgeBalanceStr) * 1e18));
-      if (bridgeBalanceRaw < netAmount) {
-        logger.warn(
-          { txId, netAmount: netAmount.toString(), bridgeBalance: bridgeBalanceStr },
-          'BSC bridge has insufficient USDT liquidity — withdrawal NOT processed. Will retry when liquidity is restored.',
-        );
-        // Do NOT push to processedMchainWithdraws — leave it unprocessed so
-        // the admin can trigger a recovery once liquidity is restored.
+      if (!/^0x[0-9a-fA-F]{40}$/i.test(destinationAddress)) {
+        logger.warn({ txId, destinationAddress }, 'Invalid BSC destination address — skipping');
+        state.processedMchainWithdraws.push(txId);
         continue;
       }
-    } catch (liquidityErr) {
-      logger.error({ liquidityErr, txId }, 'Failed to check BSC bridge liquidity — skipping unlock for safety');
-      continue;
-    }
 
-    try {
-      const account = privateKeyToAccount(key as `0x${string}`);
-      const walletClient = createWalletClient({ account, chain: bsc, transport: http('https://bsc.publicnode.com') });
-      const hash = await walletClient.writeContract({
-        address: bscBridge,
-        abi: BSC_BRIDGE_ABI,
-        functionName: 'unlock',
-        args: [destinationAddress as `0x${string}`, netAmount, txId],
-      });
+      const netAmount = applyFee(amount);
 
-      logger.info({ txId, destinationAddress, amount: amount.toString(), netAmount: netAmount.toString(), hash }, 'MChain→BSC unlock sent');
-      state.processedMchainWithdraws.push(txId);
-      if (state.processedMchainWithdraws.length > 10000) {
-        state.processedMchainWithdraws = state.processedMchainWithdraws.slice(-5000);
+      // ── BSC liquidity guard ────────────────────────────────────────────────
+      // Before calling unlock(), confirm the BSC bridge contract holds enough
+      // USDT to cover the payout.  If not, skip without marking as processed so
+      // it can be retried automatically (e.g. after admin tops up liquidity).
+      try {
+        const cfg = loadConfig();
+        const bscTokenAddr = cfg.contracts.bsc.token as `0x${string}`;
+        const bscBridgeAddr = bscBridge;
+        const bridgeBalanceStr = await getBridgeUsdtBalance(bscBridgeAddr, bscTokenAddr);
+        const bridgeBalanceRaw = BigInt(Math.floor(Number(bridgeBalanceStr) * 1e18));
+        if (bridgeBalanceRaw < netAmount) {
+          logger.warn(
+            { txId, netAmount: netAmount.toString(), bridgeBalance: bridgeBalanceStr },
+            'BSC bridge has insufficient USDT liquidity — withdrawal NOT processed. Will retry when liquidity is restored.',
+          );
+          // Do NOT push to processedMchainWithdraws — leave it unprocessed so
+          // the admin can trigger a recovery once liquidity is restored.
+          continue;
+        }
+      } catch (liquidityErr) {
+        logger.error({ liquidityErr, txId }, 'Failed to check BSC bridge liquidity — skipping unlock for safety');
+        continue;
       }
-    } catch (err) {
-      logger.error({ err, txId }, 'Failed to unlock on BSC');
+
+      try {
+        const account = privateKeyToAccount(key as `0x${string}`);
+        const walletClient = createWalletClient({ account, chain: bsc, transport: http('https://bsc.publicnode.com') });
+        const hash = await walletClient.writeContract({
+          address: bscBridge,
+          abi: BSC_BRIDGE_ABI,
+          functionName: 'unlock',
+          args: [destinationAddress as `0x${string}`, netAmount, txId],
+        });
+
+        logger.info({ txId, destinationAddress, amount: amount.toString(), netAmount: netAmount.toString(), hash }, 'MChain→BSC unlock sent');
+        state.processedMchainWithdraws.push(txId);
+        if (state.processedMchainWithdraws.length > 10000) {
+          state.processedMchainWithdraws = state.processedMchainWithdraws.slice(-5000);
+        }
+      } catch (err) {
+        logger.error({ err, txId }, 'Failed to unlock on BSC');
+      }
+    } finally {
+      inFlightTxIds.delete(txId);
     }
   }
 }
