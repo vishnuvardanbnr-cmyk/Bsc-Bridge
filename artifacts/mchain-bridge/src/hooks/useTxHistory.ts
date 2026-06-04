@@ -1,8 +1,7 @@
 import { useMemo } from 'react';
-import { createPublicClient, http, formatUnits, type Address } from 'viem';
-import { bsc } from 'wagmi/chains';
-import { mchain } from '../lib/chains';
-import { CONTRACTS, bscBridgeAbi, mchainBridgeAbi, TX_STATUS_MAP, RPC_URLS } from '../lib/contracts';
+import { ethers } from 'ethers';
+import { BSC_CHAIN_ID, MCHAIN_CHAIN_ID, BSC_RPC, getMchainRpc } from '../lib/chains';
+import { CONTRACTS, TX_STATUS_MAP } from '../lib/contracts';
 import { useQuery } from '@tanstack/react-query';
 
 export type FormattedTx = {
@@ -17,51 +16,39 @@ export type FormattedTx = {
   linkedId: string;
 };
 
-type RawTx = {
-  transactionId: `0x${string}`;
-  user: Address;
-  transactionType: string;
-  amount: bigint;
-  sourceChain: string;
-  destinationChain: string;
-  destinationAddress: string;
-  status: number;
-  timestamp: bigint;
-  linkedId: `0x${string}`;
-};
+const TX_ABI = [
+  'function getUserTransactionsByTimeRange(address user, uint256 timeRange) view returns (tuple(bytes32 transactionId, address user, string transactionType, uint256 amount, string sourceChain, string destinationChain, string destinationAddress, uint8 status, uint256 timestamp, bytes32 linkedId)[])',
+];
 
-async function fetchChainTxs(chainId: number, userAddress: Address): Promise<FormattedTx[]> {
-  const rpc = RPC_URLS[chainId];
-  const chain = chainId === bsc.id ? bsc : mchain;
-  const bridgeAddress = chainId === bsc.id ? CONTRACTS.bsc.bridge : CONTRACTS.mchain.bridge;
-  const abi = chainId === bsc.id ? (bscBridgeAbi as typeof bscBridgeAbi) : (mchainBridgeAbi as typeof mchainBridgeAbi);
+const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+async function fetchChainTxs(chainId: number, userAddress: string): Promise<FormattedTx[]> {
+  const rpcUrl = chainId === MCHAIN_CHAIN_ID ? getMchainRpc() : BSC_RPC;
+  const bridgeAddress = chainId === BSC_CHAIN_ID ? CONTRACTS.bsc.bridge : CONTRACTS.mchain.bridge;
   const timeRange = BigInt(30 * 24 * 60 * 60);
 
   try {
-    const client = createPublicClient({ chain, transport: http(rpc) });
-    const raw = await client.readContract({
-      address: bridgeAddress,
-      abi,
-      functionName: 'getUserTransactionsByTimeRange',
-      args: [userAddress, timeRange],
-    }) as readonly RawTx[];
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const contract = new ethers.Contract(bridgeAddress, TX_ABI, provider);
+    const raw: any[] = await contract.getUserTransactionsByTimeRange(userAddress, timeRange);
 
-    return raw.map((tx) => {
-      const zeroHash = '0x0000000000000000000000000000000000000000000000000000000000000000';
-      const hasLinked = tx.linkedId !== zeroHash;
+    return raw.map((tx: any) => {
+      const linkedId: string = tx.linkedId ?? ZERO_HASH;
+      const hasLinked = linkedId !== ZERO_HASH;
       const statusCode = hasLinked ? 1 : Number(tx.status);
-      const decimals = tx.amount > BigInt('1000000000000') ? 18 : 6;
+      const amount: bigint = BigInt(tx.amount ?? 0n);
+      const decimals = amount > BigInt('1000000000000') ? 18 : 6;
 
       return {
-        id: tx.transactionId,
-        type: tx.transactionType,
-        amount: formatUnits(tx.amount, decimals),
-        sourceChain: tx.sourceChain,
-        destinationChain: tx.destinationChain,
-        destinationAddress: tx.destinationAddress,
+        id: tx.transactionId as string,
+        type: tx.transactionType as string,
+        amount: ethers.formatUnits(amount, decimals),
+        sourceChain: tx.sourceChain as string,
+        destinationChain: tx.destinationChain as string,
+        destinationAddress: tx.destinationAddress as string,
         status: TX_STATUS_MAP[statusCode] ?? 'Pending',
         timestamp: Number(tx.timestamp) * 1000,
-        linkedId: tx.linkedId,
+        linkedId,
       };
     });
   } catch {
@@ -69,14 +56,14 @@ async function fetchChainTxs(chainId: number, userAddress: Address): Promise<For
   }
 }
 
-export function useTxHistory(userAddress?: Address) {
+export function useTxHistory(userAddress?: string | null) {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['txHistory', userAddress],
     queryFn: async () => {
       if (!userAddress) return [];
       const [bscTxs, mchainTxs] = await Promise.all([
-        fetchChainTxs(bsc.id, userAddress),
-        fetchChainTxs(mchain.id, userAddress),
+        fetchChainTxs(BSC_CHAIN_ID, userAddress),
+        fetchChainTxs(MCHAIN_CHAIN_ID, userAddress),
       ]);
       return [...bscTxs, ...mchainTxs]
         .sort((a, b) => b.timestamp - a.timestamp)

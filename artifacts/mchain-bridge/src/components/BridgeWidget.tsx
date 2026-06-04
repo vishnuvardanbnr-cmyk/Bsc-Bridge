@@ -1,20 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useAccount, useBalance, useSwitchChain } from 'wagmi';
+import { ethers } from 'ethers';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2, RotateCcw } from 'lucide-react';
-import { bsc } from 'wagmi/chains';
-import { mchain } from '../lib/chains';
+import { ArrowLeftRight, Clock, ExternalLink, AlertTriangle, Fuel, CheckCircle2, RotateCcw, Wallet } from 'lucide-react';
+import { BSC_CHAIN_ID, MCHAIN_CHAIN_ID, getRpcUrl } from '../lib/chains';
 import { CONTRACTS, getExplorerAddressUrl } from '../lib/contracts';
+import { useWeb3Bridge } from '../hooks/useWeb3Bridge';
 import { useBridge } from '../hooks/useBridge';
 import { useGasSubsidy } from '../hooks/useGasSubsidy';
 import { BridgeProgress } from './BridgeProgress';
 import { formatAmount, formatAddress, cn, evmToMxcAddress } from '../lib/utils';
 import { SiBinance } from 'react-icons/si';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 const BRIDGE_FEE = 0.01;
 const MC_USD_PRICE = 1;
 const MIN_AMOUNT = 5;
+
+const USDT_ABI = [
+  'function balanceOf(address account) view returns (uint256)',
+];
 
 // ── Recovery panel for stuck bridge transactions ──────────────────────────────
 function RecoveryPanel() {
@@ -79,7 +82,6 @@ function RecoveryPanel() {
             className="overflow-hidden"
           >
             <div className="pt-3 flex flex-col gap-2">
-              {/* Chain selector */}
               <div className="flex rounded-lg overflow-hidden border border-border text-xs font-semibold">
                 <button
                   onClick={() => { setChain('mchain'); setStatus('idle'); setMessage(''); }}
@@ -133,7 +135,7 @@ function RecoveryPanel() {
 }
 
 function ChainBadge({ chainId }: { chainId: number }) {
-  const isBsc = chainId === bsc.id;
+  const isBsc = chainId === BSC_CHAIN_ID;
   return (
     <div className="flex items-center gap-2">
       <div className="w-7 h-7 rounded-full flex items-center justify-center bg-background border border-border overflow-hidden flex-shrink-0">
@@ -155,44 +157,65 @@ const GAS_STEP_LABELS: Record<string, string> = {
 };
 
 export function BridgeWidget() {
-  const { address, isConnected, chain } = useAccount();
-  const { switchChain, isPending: isSwitching } = useSwitchChain();
+  const { account, currentChainId, isConnected, connect, switchChain } = useWeb3Bridge();
 
-  const [fromChainId, setFromChainId] = useState(bsc.id);
-  const [toChainId, setToChainId] = useState(mchain.id);
+  const [fromChainId, setFromChainId] = useState(BSC_CHAIN_ID);
+  const [toChainId, setToChainId] = useState(MCHAIN_CHAIN_ID);
   const [amount, setAmount] = useState('');
   const [destinationAddress, setDestinationAddress] = useState('');
+  const [balance, setBalance] = useState(0);
 
+  const numAmount = Number(amount) || 0;
 
-  // Auto-set direction whenever the connected chain changes
+  // Auto-set direction when connected chain changes
   useEffect(() => {
-    if (!chain) return;
-    if (chain.id === bsc.id) {
-      setFromChainId(bsc.id);
-      setToChainId(mchain.id);
-    } else if (chain.id === mchain.id) {
-      setFromChainId(mchain.id);
-      setToChainId(bsc.id);
+    if (!currentChainId) return;
+    if (currentChainId === BSC_CHAIN_ID) {
+      setFromChainId(BSC_CHAIN_ID);
+      setToChainId(MCHAIN_CHAIN_ID);
+    } else if (currentChainId === MCHAIN_CHAIN_ID) {
+      setFromChainId(MCHAIN_CHAIN_ID);
+      setToChainId(BSC_CHAIN_ID);
     }
-  }, [chain?.id]);
+  }, [currentChainId]);
 
-  // Pre-fill destination address — MXC bech32 format when dest is MChain, 0x when dest is BSC
+  // Pre-fill destination address
   useEffect(() => {
-    if (!address) return;
-    if (toChainId === mchain.id) {
-      setDestinationAddress(evmToMxcAddress(address));
+    if (!account) return;
+    if (toChainId === MCHAIN_CHAIN_ID) {
+      setDestinationAddress(evmToMxcAddress(account));
     } else {
-      setDestinationAddress(address);
+      setDestinationAddress(account);
     }
-  }, [address, toChainId]);
+  }, [account, toChainId]);
 
-  // ── MChain → BSC liquidity pre-check ─────────────────────────────────────
+  // Read USDT balance from direct RPC
+  useEffect(() => {
+    if (!account) { setBalance(0); return; }
+    const tokenAddress = fromChainId === BSC_CHAIN_ID ? CONTRACTS.bsc.token : CONTRACTS.mchain.token;
+    const rpcUrl = getRpcUrl(fromChainId);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider(rpcUrl);
+        const contract = new ethers.Contract(tokenAddress, USDT_ABI, provider);
+        const raw: bigint = await contract.balanceOf(account);
+        if (!cancelled) setBalance(Number(ethers.formatUnits(raw, 18)));
+      } catch {
+        if (!cancelled) setBalance(0);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [account, fromChainId]);
+
+  // ── MChain → BSC liquidity pre-check ────────────────────────────────────────
   const [bscLiquidity, setBscLiquidity] = useState<{ sufficient: boolean; bridgeBalance: string } | null>(null);
   const liquidityDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Only run when bridging FROM MChain → TO BSC
-    if (fromChainId === mchain.id && numAmount >= MIN_AMOUNT) {
+    if (fromChainId === MCHAIN_CHAIN_ID && numAmount >= MIN_AMOUNT) {
       if (liquidityDebounce.current) clearTimeout(liquidityDebounce.current);
       setBscLiquidity(null);
       liquidityDebounce.current = setTimeout(async () => {
@@ -203,7 +226,7 @@ export function BridgeWidget() {
             setBscLiquidity(data);
           }
         } catch {
-          // silently ignore — don't block the user on a network error
+          // silently ignore
         }
       }, 600);
     } else {
@@ -212,30 +235,21 @@ export function BridgeWidget() {
     return () => { if (liquidityDebounce.current) clearTimeout(liquidityDebounce.current); };
   }, [fromChainId, numAmount]);
 
-  const insufficientBscLiquidity = fromChainId === mchain.id && bscLiquidity !== null && !bscLiquidity.sufficient;
+  const insufficientBscLiquidity = fromChainId === MCHAIN_CHAIN_ID && bscLiquidity !== null && !bscLiquidity.sufficient;
 
   const gasSubsidy = useGasSubsidy();
-  const { step, error, txHash, handleBridge, reset: resetBridge, needsApproval } = useBridge(
-    fromChainId, toChainId, amount, destinationAddress
+  const { step, error, txHash, handleBridge, reset: resetBridge } = useBridge(
+    fromChainId, toChainId, amount, destinationAddress, account
   );
 
-  const isBsc = fromChainId === bsc.id;
-  const tokenAddress = isBsc ? CONTRACTS.bsc.token : CONTRACTS.mchain.token;
+  const isBsc = fromChainId === BSC_CHAIN_ID;
   const bridgeAddress = isBsc ? CONTRACTS.bsc.bridge : CONTRACTS.mchain.bridge;
-
-  const { data: balanceData } = useBalance({
-    address,
-    token: tokenAddress,
-    chainId: fromChainId,
-    query: { enabled: !!address },
-  });
-
-  const balance = balanceData ? Number(balanceData.formatted) : 0;
-  const numAmount = Number(amount) || 0;
 
   const hasInsufficientBalance = numAmount > balance && balance > 0;
   const isBelowMin = numAmount > 0 && numAmount < MIN_AMOUNT;
-  const isDestinationInvalid = destinationAddress.length > 0 && !destinationAddress.startsWith('0x');
+
+  // Destination is always auto-filled and valid when present
+  const isDestinationInvalid = false;
 
   const estimatedReceive = numAmount > 0 ? numAmount * (1 - BRIDGE_FEE) : 0;
   const usdValue = (numAmount * MC_USD_PRICE).toFixed(2);
@@ -245,7 +259,7 @@ export function BridgeWidget() {
     const newFrom = toChainId;
     setFromChainId(newFrom);
     setToChainId(fromChainId);
-    if (switchChain) switchChain({ chainId: newFrom });
+    switchChain(newFrom);
   };
 
   const handleReset = () => {
@@ -253,16 +267,12 @@ export function BridgeWidget() {
     gasSubsidy.reset();
   };
 
-  // Main bridge action — runs gas check/fund first (BSC only), then bridge
   const handleStart = async () => {
-    if (!address) return;
-
-    // Only do gas subsidy check on BSC side (MChain has native gas)
+    if (!account) return;
     if (isBsc) {
-      const ready = await gasSubsidy.ensureGas(address, amount);
+      const ready = await gasSubsidy.ensureGas(account, amount);
       if (!ready) return;
     }
-
     handleBridge();
   };
 
@@ -275,10 +285,8 @@ export function BridgeWidget() {
     if (isBelowMin) return { label: `Minimum ${MIN_AMOUNT} USDT`, disabled: true, action: 'none' as const };
     if (hasInsufficientBalance) return { label: 'Insufficient Balance', disabled: true, action: 'none' as const };
     if (!destinationAddress || destinationAddress.length < 10) return { label: 'Enter Destination Address', disabled: true, action: 'none' as const };
-    if (isDestinationInvalid) return { label: 'Invalid Destination Address', disabled: true, action: 'none' as const };
     if (insufficientBscLiquidity) return { label: 'Insufficient BSC Liquidity', disabled: true, action: 'none' as const };
     if (isGasLoading) return { label: GAS_STEP_LABELS[gasSubsidy.step] ?? 'Preparing…', disabled: true, action: 'none' as const };
-    if (needsApproval) return { label: 'Approve & Bridge', disabled: false, action: 'bridge' as const };
     return { label: `Bridge ${formatAmount(numAmount)} USDT`, disabled: false, action: 'bridge' as const };
   };
 
@@ -393,6 +401,17 @@ export function BridgeWidget() {
                 )}
               </div>
 
+              {/* Swap button */}
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+                <button
+                  data-testid="swap-chains-btn"
+                  onClick={handleSwap}
+                  className="w-8 h-8 rounded-full bg-surface border-2 border-border flex items-center justify-center hover:border-primary hover:text-primary transition-all shadow-md"
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               {/* TO */}
               <div className="bg-surface-raised border border-border rounded-xl p-4 flex items-center justify-between gap-3">
                 <div className="flex flex-col gap-1.5 flex-shrink-0">
@@ -433,12 +452,7 @@ export function BridgeWidget() {
             )}
 
             {/* Destination Address */}
-            <div className={cn(
-              'bg-surface-raised border rounded-xl p-4 mb-5 transition-colors',
-              isDestinationInvalid
-                ? 'border-danger focus-within:border-danger'
-                : 'border-border focus-within:border-primary'
-            )}>
+            <div className="bg-surface-raised border border-border rounded-xl p-4 mb-5">
               <div className="flex flex-col gap-2">
                 <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
                   Your {isBsc ? 'MChain' : 'BSC'} address (destination)
@@ -454,67 +468,58 @@ export function BridgeWidget() {
                 />
               </div>
             </div>
-            {isDestinationInvalid && (
-              <p className="text-danger text-xs font-semibold -mt-3 mb-3 text-right flex items-center justify-end gap-1">
-                <AlertTriangle className="w-3 h-3" /> Invalid EVM address
-              </p>
-            )}
 
-
-            {/* Bridge Details — always visible */}
+            {/* Bridge Details */}
             <div className="mb-5">
               <p className="py-2 text-sm font-semibold text-muted-foreground">Bridge Details</p>
               <div className="flex flex-col gap-3 pb-1">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[12px] text-muted-foreground">Bridge Fee</span>
-                        <span className="text-[13px] font-semibold text-foreground">
-                          1% · {feeAmount} USDT
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[12px] text-muted-foreground">Estimated Time</span>
-                        <span className="text-[13px] font-semibold text-foreground flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> ~3 minutes
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[12px] text-muted-foreground">Route</span>
-                        <span className="text-[13px] font-semibold text-foreground">
-                          {isBsc ? 'BSC → MChain' : 'MChain → BSC'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[12px] text-muted-foreground">Contract</span>
-                        <a
-                          href={getExplorerAddressUrl(fromChainId, bridgeAddress)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[13px] font-semibold text-primary hover:underline flex items-center gap-1 font-mono"
-                        >
-                          {formatAddress(bridgeAddress)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[12px] text-muted-foreground">Token</span>
-                        <span className="text-[13px] font-semibold text-foreground">USDT</span>
-                      </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[12px] text-muted-foreground">Bridge Fee</span>
+                  <span className="text-[13px] font-semibold text-foreground">
+                    1% · {feeAmount} USDT
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[12px] text-muted-foreground">Estimated Time</span>
+                  <span className="text-[13px] font-semibold text-foreground flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> ~3 minutes
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[12px] text-muted-foreground">Route</span>
+                  <span className="text-[13px] font-semibold text-foreground">
+                    {isBsc ? 'BSC → MChain' : 'MChain → BSC'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[12px] text-muted-foreground">Contract</span>
+                  <a
+                    href={getExplorerAddressUrl(fromChainId, bridgeAddress)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[13px] font-semibold text-primary hover:underline flex items-center gap-1 font-mono"
+                  >
+                    {formatAddress(bridgeAddress)}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[12px] text-muted-foreground">Token</span>
+                  <span className="text-[13px] font-semibold text-foreground">USDT</span>
+                </div>
               </div>
             </div>
 
             {/* Action Button */}
             {btnState.action === 'connect' ? (
-              <ConnectButton.Custom>
-                {({ openConnectModal }) => (
-                  <button
-                    data-testid="connect-wallet-btn"
-                    onClick={openConnectModal}
-                    className="w-full rounded-xl py-4 font-bold bg-gradient-to-br from-primary to-primary-hover text-white shadow-lg shadow-primary/20 hover:shadow-primary/40 hover:opacity-90 transition-all"
-                  >
-                    Connect Wallet
-                  </button>
-                )}
-              </ConnectButton.Custom>
+              <button
+                data-testid="connect-wallet-btn"
+                onClick={connect}
+                className="w-full rounded-xl py-4 font-bold bg-gradient-to-br from-primary to-primary-hover text-white shadow-lg shadow-primary/20 hover:shadow-primary/40 hover:opacity-90 transition-all flex items-center justify-center gap-2"
+              >
+                <Wallet className="w-5 h-5" />
+                Connect Wallet
+              </button>
             ) : (
               <button
                 data-testid="bridge-action-btn"

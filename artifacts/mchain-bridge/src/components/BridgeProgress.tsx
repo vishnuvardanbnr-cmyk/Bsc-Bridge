@@ -3,7 +3,7 @@ import { CheckCircle2, XCircle, ExternalLink, Clock } from 'lucide-react';
 import { formatAmount, formatAddress } from '../lib/utils';
 import { BridgeStep } from '../hooks/useBridge';
 import { getExplorerTxUrl } from '../lib/contracts';
-import { bsc } from 'wagmi/chains';
+import { BSC_CHAIN_ID } from '../lib/chains';
 
 const BRIDGE_FEE = 0.01; // 1%
 
@@ -28,9 +28,9 @@ export function BridgeProgress({
   destinationAddress,
   onReset,
 }: BridgeProgressProps) {
-  const fromChainName = fromChainId === bsc.id ? 'BSC' : 'MChain';
-  const toChainName = toChainId === bsc.id ? 'BSC' : 'MChain';
-  const isBsc = fromChainId === bsc.id;
+  const fromChainName = fromChainId === BSC_CHAIN_ID ? 'BSC' : 'MChain';
+  const toChainName = toChainId === BSC_CHAIN_ID ? 'BSC' : 'MChain';
+  const isBsc = fromChainId === BSC_CHAIN_ID;
 
   const steps = [
     { id: 'approving', label: 'Approve' },
@@ -156,8 +156,8 @@ export function BridgeProgress({
       <div className="flex items-center justify-between mb-8 px-4 relative">
         <div className="absolute top-4 left-8 right-8 h-0.5 bg-border -z-10" />
         {steps.map((s, idx) => {
-          const isCompleted = currentStepIndex > idx || step === 'done';
-          const isCurrent = currentStepIndex === idx && step !== 'done';
+          const isCompleted = currentStepIndex > idx;
+          const isCurrent = currentStepIndex === idx;
           return (
             <div key={s.id} className="flex flex-col items-center gap-2">
               <div className="w-8 h-8 rounded-full flex items-center justify-center bg-surface relative">

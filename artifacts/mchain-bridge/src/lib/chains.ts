@@ -1,30 +1,34 @@
-import { getDefaultConfig, darkTheme } from '@rainbow-me/rainbowkit';
-import { bsc } from 'wagmi/chains';
-import { defineChain, http } from 'viem';
+export const BSC_CHAIN_ID = 56;
+export const MCHAIN_CHAIN_ID = 1888;
 
-export const mchain = defineChain({
-  id: 1888,
-  name: 'MChain',
+export const BSC_NETWORK = {
+  chainId: '0x38',
+  chainName: 'BNB Smart Chain',
+  rpcUrls: ['https://bsc.publicnode.com'],
+  blockExplorerUrls: ['https://bscscan.com/'],
+  nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+};
+
+export const MCHAIN_NETWORK = {
+  chainId: '0x760',
+  chainName: 'MChain',
+  rpcUrls: ['/api/rpc/mchain'],
+  blockExplorerUrls: ['https://explorer.mchain.network'],
   nativeCurrency: { name: 'MChain', symbol: 'MC', decimals: 18 },
-  rpcUrls: { default: { http: ['https://node.mymchain.com/api/rpc'] } },
-  blockExplorers: { default: { name: 'MChain Explorer', url: 'https://explorer.mchain.network' } },
-});
+};
 
-export const wagmiConfig = getDefaultConfig({
-  appName: 'MChain Bridge',
-  projectId: 'mchain-bridge-placeholder',
-  chains: [bsc, mchain],
-  transports: {
-    [bsc.id]: http('https://bsc.publicnode.com'),
-    [mchain.id]: http('/api/rpc/mchain'),
-  },
-});
+export const BSC_RPC = 'https://bsc.publicnode.com';
 
-export const rainbowTheme = darkTheme({
-  accentColor: '#0EA5E9',
-  accentColorForeground: 'white',
-  borderRadius: 'large',
-  overlayBlur: 'small',
-});
+export function getMchainRpc(): string {
+  if (typeof window !== 'undefined') return `${window.location.origin}/api/rpc/mchain`;
+  return 'https://node.mymchain.com/api/rpc';
+}
 
-export const SUPPORTED_CHAINS = [bsc, mchain] as const;
+export function getRpcUrl(chainId: number): string {
+  return chainId === MCHAIN_CHAIN_ID ? getMchainRpc() : BSC_RPC;
+}
+
+export const SUPPORTED_CHAINS = [
+  { id: BSC_CHAIN_ID, name: 'BNB Smart Chain' },
+  { id: MCHAIN_CHAIN_ID, name: 'MChain' },
+] as const;

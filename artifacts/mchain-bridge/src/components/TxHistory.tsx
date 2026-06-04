@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useWeb3Bridge } from '../hooks/useWeb3Bridge';
 import { useTxHistory } from '../hooks/useTxHistory';
 import { ChevronDown, ArrowRight, ExternalLink, RotateCw } from 'lucide-react';
 import { cn, formatAmount, formatAddress } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getExplorerTxUrl } from '../lib/contracts';
-import { bsc } from 'wagmi/chains';
+import { BSC_CHAIN_ID } from '../lib/chains';
 
 function getChainId(chainName: string): number {
   if (chainName.toLowerCase().includes('bsc') || chainName.toLowerCase().includes('binance')) return 56;
@@ -23,11 +23,11 @@ function timeAgo(ts: number): string {
 }
 
 export function TxHistory() {
-  const { address } = useAccount();
-  const { history, isLoading, refetch } = useTxHistory(address);
+  const { account } = useWeb3Bridge();
+  const { history, isLoading, refetch } = useTxHistory(account);
   const [isOpen, setIsOpen] = useState(false);
 
-  if (!address) return null;
+  if (!account) return null;
 
   return (
     <div className="w-full mt-4" data-testid="tx-history-panel">
@@ -90,7 +90,7 @@ export function TxHistory() {
                       <div className="flex items-center gap-2 text-sm font-semibold text-foreground font-mono">
                         <span>{formatAmount(tx.amount)} USDT</span>
                         <ArrowRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                        <span className="truncate">{tx.destinationChain || (destChainId === bsc.id ? 'BSC' : 'MChain')}</span>
+                        <span className="truncate">{tx.destinationChain || (destChainId === BSC_CHAIN_ID ? 'BSC' : 'MChain')}</span>
                       </div>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span>{timeAgo(tx.timestamp)}</span>
